@@ -21,6 +21,7 @@ jobs:
         run: |
           pip install numpy scipy
           pip install https://github.com/casadi/casadi/releases/download/nightly-mac_update/casadi-3.7.2.dev+mac.update-cp311-none-macosx_10_13_x86_64.macosx_10_13_intel.whl
+          brew install gdb
 
       - name: Run debug script
         shell: bash -el {0}
