@@ -25,4 +25,12 @@ jobs:
       - name: Run debug script
         shell: bash -el {0}
         run: |
-          lldb -b -o "breakpoint set -n IntegerSX" -o "breakpoint command add -o bt -o continue" -o "run" -- python debug.py
+          cat > debug.lldb << 'EOF'
+          breakpoint set -n IntegerSX
+          breakpoint command add 1
+          bt
+          continue
+          DONE
+          run
+          EOF
+          lldb -b -s debug.lldb -- python debug.py
