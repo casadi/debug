@@ -10,17 +10,19 @@ jobs:
     steps:
       - uses: actions/checkout@v4.1.1
 
-      - name: Get Python version
-        id: pyver
-        run: |
-          PYVER=$(python3 -c "import sys; print(f'cp{sys.version_info.major}{sys.version_info.minor}')")
-          echo "pyver=$PYVER" >> $GITHUB_OUTPUT
+      - uses: conda-incubator/setup-miniconda@v3.1.0
+        with:
+          python-version: "3.11"
+          activate-environment: test
+          auto-update-conda: true
 
       - name: Install dependencies
+        shell: bash -el {0}
         run: |
-          pip3 install numpy scipy
-          pip3 install https://github.com/casadi/casadi/releases/download/nightly-mac_update/casadi-3.7.2.dev+mac.update-${{ steps.pyver.outputs.pyver }}-none-macosx_10_13_x86_64.macosx_10_13_intel.whl
+          pip install numpy scipy
+          pip install https://github.com/casadi/casadi/releases/download/nightly-mac_update/casadi-3.7.2.dev+mac.update-cp311-none-macosx_10_13_x86_64.macosx_10_13_intel.whl
 
       - name: Run debug script
+        shell: bash -el {0}
         run: |
-          python3 debug.py
+          python debug.py
