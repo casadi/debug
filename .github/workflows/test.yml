@@ -1,0 +1,28 @@
+name: Test CasADi
+
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  test-casadi:
+    runs-on: macos-15-intel
+    steps:
+      - uses: actions/checkout@v4.1.1
+
+      - uses: conda-incubator/setup-miniconda@v3.1.0
+        with:
+          python-version: "3.11"
+          activate-environment: test
+          auto-update-conda: true
+
+      - name: Install dependencies
+        shell: bash -el {0}
+        run: |
+          pip install numpy scipy
+          pip install https://github.com/casadi/casadi/releases/download/nightly-mac_update/casadi-3.7.2.dev+mac.update-cp311-none-macosx_10_13_x86_64.macosx_10_13_intel.whl
+
+      - name: Run debug script
+        shell: bash -el {0}
+        run: |
+          python debug.py
