@@ -25,4 +25,5 @@ jobs:
       - name: Run debug script
         shell: bash -el {0}
         run: |
-          python debug.py
+          #python debug.py
+          gdb -batch -x debug.gdb --args python debug.py
