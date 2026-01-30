@@ -5,32 +5,61 @@ on:
   workflow_dispatch:
 
 jobs:
-  test-casadi:
-    runs-on: macos-15-intel
+  # Previous debug job - commented out
+  # test-casadi:
+  #   runs-on: macos-15-intel
+  #   steps:
+  #     - uses: actions/checkout@v4.1.1
+  #
+  #     - uses: conda-incubator/setup-miniconda@v3.1.0
+  #       with:
+  #         python-version: "3.11"
+  #         activate-environment: test
+  #         auto-update-conda: true
+  #
+  #     - name: Install dependencies
+  #       shell: bash -el {0}
+  #       run: |
+  #         pip install numpy scipy
+  #         pip install https://github.com/casadi/casadi/releases/download/nightly-mac_update/casadi-3.7.2.dev+mac.update-cp311-none-macosx_10_13_x86_64.macosx_10_13_intel.whl
+  #
+  #     - name: Run debug script
+  #       shell: bash -el {0}
+  #       run: |
+  #         cat > debug.lldb << 'EOF'
+  #         breakpoint set -n IntegerSX
+  #         breakpoint command add 1
+  #         bt
+  #         continue
+  #         DONE
+  #         run
+  #         EOF
+  #         lldb -b -s debug.lldb -- python debug.py
+
+  # Reproducing test-matlab windows "Run script" step
+  test-matlab:
+    runs-on: windows-2022
     steps:
       - uses: actions/checkout@v4.1.1
-
-      - uses: conda-incubator/setup-miniconda@v3.1.0
         with:
-          python-version: "3.11"
-          activate-environment: test
-          auto-update-conda: true
+          repository: casadi/casadi
+          ref: main
 
-      - name: Install dependencies
-        shell: bash -el {0}
-        run: |
-          pip install numpy scipy
-          pip install https://github.com/casadi/casadi/releases/download/nightly-mac_update/casadi-3.7.2.dev+mac.update-cp311-none-macosx_10_13_x86_64.macosx_10_13_intel.whl
+      - uses: ilammy/msvc-dev-cmd@v1.12.1
 
-      - name: Run debug script
-        shell: bash -el {0}
+      - name: Download matlab artifact
         run: |
-          cat > debug.lldb << 'EOF'
-          breakpoint set -n IntegerSX
-          breakpoint command add 1
-          bt
-          continue
-          DONE
-          run
-          EOF
-          lldb -b -s debug.lldb -- python debug.py
+          C:\msys64\usr\bin\wget.exe https://github.com/casadi/casadi/releases/download/nightly-main/casadi-main-windows64-matlab2018b.zip -O casadi-windows64-matlab2018b.zip
+
+      - name: Unpack source
+        run: unzip casadi-windows64-matlab2018b.zip -d casadi
+
+      - run: echo "MATLABPATH=${{ github.workspace }}\casadi" >> $env:GITHUB_ENV
+
+      - name: Set up MATLAB
+        uses: matlab-actions/setup-matlab@v2
+
+      - name: Run script
+        uses: matlab-actions/run-command@v2
+        with:
+          command: addpath('${{ github.workspace }}/casadi');cd test/matlab;solvers
