@@ -38,12 +38,57 @@ jobs:
 
   # Reproducing test-matlab windows "Run script" step
   test-matlab:
+  #   ...
+
+  # Get list of plugins first
+  get-plugins:
     runs-on: windows-2022
+    outputs:
+      plugins: ${{ steps.get-list.outputs.plugins }}
     steps:
+      - uses: actions/checkout@v4.1.1
+
+      - name: Download matlab artifact
+        run: |
+          C:\msys64\usr\bin\wget.exe https://github.com/casadi/casadi/releases/download/nightly-main/casadi-main-windows64-matlab2018b.zip -O casadi-windows64-matlab2018b.zip
+
+      - name: Unpack source
+        run: unzip casadi-windows64-matlab2018b.zip -d casadi
+
+      - run: echo "MATLABPATH=${{ github.workspace }}\casadi" >> $env:GITHUB_ENV
+
+      - name: Set up MATLAB
+        uses: matlab-actions/setup-matlab@v2
+
+      - name: Get plugin list
+        uses: matlab-actions/run-command@v2
+        with:
+          command: addpath('${{ github.workspace }}/casadi'); get_plugins
+
+      - name: Output plugin list as JSON
+        id: get-list
+        shell: pwsh
+        run: |
+          $plugins = Get-Content plugins.txt | Where-Object { $_ -ne "" }
+          $json = $plugins | ConvertTo-Json -Compress
+          echo "plugins=$json" >> $env:GITHUB_OUTPUT
+
+  # Test each plugin in a separate job
+  test-plugin:
+    needs: get-plugins
+    runs-on: windows-2022
+    strategy:
+      fail-fast: false
+      matrix:
+        plugin: ${{ fromJson(needs.get-plugins.outputs.plugins) }}
+    steps:
+      - uses: actions/checkout@v4.1.1
+
       - uses: actions/checkout@v4.1.1
         with:
           repository: casadi/casadi
           ref: main
+          path: casadi-src
 
       - uses: ilammy/msvc-dev-cmd@v1.12.1
 
@@ -59,7 +104,7 @@ jobs:
       - name: Set up MATLAB
         uses: matlab-actions/setup-matlab@v2
 
-      - name: Run script
+      - name: Test plugin ${{ matrix.plugin }}
         uses: matlab-actions/run-command@v2
         with:
-          command: addpath('${{ github.workspace }}/casadi');cd test/matlab;solvers
+          command: addpath('${{ github.workspace }}/casadi'); test_single_plugin('${{ matrix.plugin }}')
