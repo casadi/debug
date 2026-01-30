@@ -8,36 +8,6 @@ jobs:
   # Previous debug job - commented out
   # test-casadi:
   #   runs-on: macos-15-intel
-  #   steps:
-  #     - uses: actions/checkout@v4.1.1
-  #
-  #     - uses: conda-incubator/setup-miniconda@v3.1.0
-  #       with:
-  #         python-version: "3.11"
-  #         activate-environment: test
-  #         auto-update-conda: true
-  #
-  #     - name: Install dependencies
-  #       shell: bash -el {0}
-  #       run: |
-  #         pip install numpy scipy
-  #         pip install https://github.com/casadi/casadi/releases/download/nightly-mac_update/casadi-3.7.2.dev+mac.update-cp311-none-macosx_10_13_x86_64.macosx_10_13_intel.whl
-  #
-  #     - name: Run debug script
-  #       shell: bash -el {0}
-  #       run: |
-  #         cat > debug.lldb << 'EOF'
-  #         breakpoint set -n IntegerSX
-  #         breakpoint command add 1
-  #         bt
-  #         continue
-  #         DONE
-  #         run
-  #         EOF
-  #         lldb -b -s debug.lldb -- python debug.py
-
-  # Reproducing test-matlab windows "Run script" step
-  test-matlab:
   #   ...
 
   # Get list of plugins first
@@ -69,8 +39,12 @@ jobs:
         id: get-list
         shell: pwsh
         run: |
-          $plugins = Get-Content plugins.txt | Where-Object { $_ -ne "" }
-          $json = $plugins | ConvertTo-Json -Compress
+          $plugins = Get-Content plugins.txt | Where-Object { $_.Trim() -ne "" }
+          $arr = @()
+          foreach ($p in $plugins) {
+            $arr += @{plugin = $p}
+          }
+          $json = @{include = $arr} | ConvertTo-Json -Compress -Depth 3
           echo "plugins=$json" >> $env:GITHUB_OUTPUT
 
   # Test each plugin in a separate job
@@ -79,8 +53,7 @@ jobs:
     runs-on: windows-2022
     strategy:
       fail-fast: false
-      matrix:
-        plugin: ${{ fromJson(needs.get-plugins.outputs.plugins) }}
+      matrix: ${{ fromJson(needs.get-plugins.outputs.plugins) }}
     steps:
       - uses: actions/checkout@v4.1.1
 
@@ -104,7 +77,9 @@ jobs:
       - name: Set up MATLAB
         uses: matlab-actions/setup-matlab@v2
 
-      - name: Test plugin ${{ matrix.plugin }}
+      - name: Test plugin
         uses: matlab-actions/run-command@v2
+        env:
+          PLUGIN: ${{ matrix.plugin }}
         with:
-          command: addpath('${{ github.workspace }}/casadi'); test_single_plugin('${{ matrix.plugin }}')
+          command: addpath('${{ github.workspace }}/casadi'); test_single_plugin(getenv('PLUGIN'))
