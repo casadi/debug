@@ -22,11 +22,6 @@ jobs:
         with:
           release: R2025a
 
-      - name: Diag - just quit
-        uses: matlab-actions/run-command@v2
-        with:
-          command: addpath('${{ github.workspace }}/casadi'); test_single_plugin('Integrator::rk')
-
       - name: Diag - clear mex then quit
         uses: matlab-actions/run-command@v2
         with:
@@ -37,7 +32,12 @@ jobs:
         with:
           command: addpath('${{ github.workspace }}/casadi'); test_single_plugin('Integrator::rk'); clear all; pause(1)
 
-  test-3.7.2:
+      - name: Diag - just quit
+        uses: matlab-actions/run-command@v2
+        with:
+          command: addpath('${{ github.workspace }}/casadi'); test_single_plugin('Integrator::rk')
+
+  test-v372:
     runs-on: windows-2022
     steps:
       - uses: actions/checkout@v4.1.1
@@ -54,11 +54,6 @@ jobs:
         with:
           release: R2025a
 
-      - name: Diag - just quit
-        uses: matlab-actions/run-command@v2
-        with:
-          command: addpath('${{ github.workspace }}/casadi'); test_single_plugin('Integrator::rk')
-
       - name: Diag - clear mex then quit
         uses: matlab-actions/run-command@v2
         with:
@@ -68,3 +63,8 @@ jobs:
         uses: matlab-actions/run-command@v2
         with:
           command: addpath('${{ github.workspace }}/casadi'); test_single_plugin('Integrator::rk'); clear all; pause(1)
+
+      - name: Diag - just quit
+        uses: matlab-actions/run-command@v2
+        with:
+          command: addpath('${{ github.workspace }}/casadi'); test_single_plugin('Integrator::rk')
