@@ -5,29 +5,66 @@ on:
   workflow_dispatch:
 
 jobs:
-  test-shutdown:
+  test-nightly:
     runs-on: windows-2022
     steps:
       - uses: actions/checkout@v4.1.1
 
-      - name: Download matlab artifact
+      - name: Download CasADi nightly
         run: |
-          C:\msys64\usr\bin\wget.exe https://github.com/casadi/casadi/releases/download/nightly-main/casadi-main-windows64-matlab2018b.zip -O casadi-windows64-matlab2018b.zip
+          C:\msys64\usr\bin\wget.exe https://github.com/casadi/casadi/releases/download/nightly-main/casadi-main-windows64-matlab2018b.zip -O casadi.zip
 
-      - name: Unpack source
-        run: unzip casadi-windows64-matlab2018b.zip -d casadi
+      - name: Unpack
+        run: unzip casadi.zip -d casadi
 
       - name: Set up MATLAB
         uses: matlab-actions/setup-matlab@v2
         with:
           release: R2025a
 
+      - name: Diag - just quit
+        uses: matlab-actions/run-command@v2
+        with:
+          command: addpath('${{ github.workspace }}/casadi'); test_single_plugin('Integrator::rk')
+
       - name: Diag - clear mex then quit
         uses: matlab-actions/run-command@v2
         with:
-          command: addpath('${{ github.workspace }}/casadi'); import casadi.*; x=MX.sym('x'); xdot=x; dae=struct('x',x,'ode',xdot); F=integrator('F','rk',dae,0,1); clear mex; pause(1)
+          command: addpath('${{ github.workspace }}/casadi'); test_single_plugin('Integrator::rk'); clear mex; pause(1)
 
       - name: Diag - clear all then quit
         uses: matlab-actions/run-command@v2
         with:
-          command: addpath('${{ github.workspace }}/casadi'); import casadi.*; x=MX.sym('x'); xdot=x; dae=struct('x',x,'ode',xdot); F=integrator('F','rk',dae,0,1); clear all; pause(1)
+          command: addpath('${{ github.workspace }}/casadi'); test_single_plugin('Integrator::rk'); clear all; pause(1)
+
+  test-3.7.2:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4.1.1
+
+      - name: Download CasADi 3.7.2
+        run: |
+          C:\msys64\usr\bin\wget.exe https://github.com/casadi/casadi/releases/download/3.7.2/casadi-3.7.2-windows64-matlab2018b.zip -O casadi.zip
+
+      - name: Unpack
+        run: unzip casadi.zip -d casadi
+
+      - name: Set up MATLAB
+        uses: matlab-actions/setup-matlab@v2
+        with:
+          release: R2025a
+
+      - name: Diag - just quit
+        uses: matlab-actions/run-command@v2
+        with:
+          command: addpath('${{ github.workspace }}/casadi'); test_single_plugin('Integrator::rk')
+
+      - name: Diag - clear mex then quit
+        uses: matlab-actions/run-command@v2
+        with:
+          command: addpath('${{ github.workspace }}/casadi'); test_single_plugin('Integrator::rk'); clear mex; pause(1)
+
+      - name: Diag - clear all then quit
+        uses: matlab-actions/run-command@v2
+        with:
+          command: addpath('${{ github.workspace }}/casadi'); test_single_plugin('Integrator::rk'); clear all; pause(1)
