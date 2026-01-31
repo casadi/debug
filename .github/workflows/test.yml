@@ -5,16 +5,8 @@ on:
   workflow_dispatch:
 
 jobs:
-  # Previous debug job - commented out
-  # test-casadi:
-  #   runs-on: macos-15-intel
-  #   ...
-
-  # Get list of plugins first
-  get-plugins:
+  test-shutdown:
     runs-on: windows-2022
-    outputs:
-      plugins: ${{ steps.get-list.outputs.plugins }}
     steps:
       - uses: actions/checkout@v4.1.1
 
@@ -24,64 +16,18 @@ jobs:
 
       - name: Unpack source
         run: unzip casadi-windows64-matlab2018b.zip -d casadi
-
-      - run: echo "MATLABPATH=${{ github.workspace }}\casadi" >> $env:GITHUB_ENV
-
-      - name: Set up MATLAB
-        uses: matlab-actions/setup-matlab@v2
-
-      - name: Get plugin list
-        uses: matlab-actions/run-command@v2
-        with:
-          command: addpath('${{ github.workspace }}/casadi'); get_plugins
-
-      - name: Output plugin list as JSON
-        id: get-list
-        shell: pwsh
-        run: |
-          $plugins = Get-Content plugins.txt | Where-Object { $_.Trim() -ne "" }
-          $arr = @()
-          foreach ($p in $plugins) {
-            $arr += @{plugin = $p}
-          }
-          $json = @{include = $arr} | ConvertTo-Json -Compress -Depth 3
-          echo "plugins=$json" >> $env:GITHUB_OUTPUT
-
-  # Test each plugin in a separate job
-  test-plugin:
-    needs: get-plugins
-    runs-on: windows-2022
-    strategy:
-      fail-fast: false
-      matrix: ${{ fromJson(needs.get-plugins.outputs.plugins) }}
-    steps:
-      - uses: actions/checkout@v4.1.1
-
-      - uses: actions/checkout@v4.1.1
-        with:
-          repository: casadi/casadi
-          ref: main
-          path: casadi-src
-
-      - uses: ilammy/msvc-dev-cmd@v1.12.1
-
-      - name: Download matlab artifact
-        run: |
-          C:\msys64\usr\bin\wget.exe https://github.com/casadi/casadi/releases/download/nightly-main/casadi-main-windows64-matlab2018b.zip -O casadi-windows64-matlab2018b.zip
-
-      - name: Unpack source
-        run: unzip casadi-windows64-matlab2018b.zip -d casadi
-
-      - run: echo "MATLABPATH=${{ github.workspace }}\casadi" >> $env:GITHUB_ENV
 
       - name: Set up MATLAB
         uses: matlab-actions/setup-matlab@v2
         with:
           release: R2025a
 
-      - name: Test plugin
+      - name: Diag - clear mex then quit
         uses: matlab-actions/run-command@v2
-        env:
-          PLUGIN: ${{ matrix.plugin }}
         with:
-          command: addpath('${{ github.workspace }}/casadi'); test_single_plugin(getenv('PLUGIN'))
+          command: addpath('${{ github.workspace }}/casadi'); import casadi.*; x=MX.sym('x'); xdot=x; dae=struct('x',x,'ode',xdot); F=integrator('F','rk',dae,0,1); clear mex; pause(1)
+
+      - name: Diag - clear all then quit
+        uses: matlab-actions/run-command@v2
+        with:
+          command: addpath('${{ github.workspace }}/casadi'); import casadi.*; x=MX.sym('x'); xdot=x; dae=struct('x',x,'ode',xdot); F=integrator('F','rk',dae,0,1); clear all; pause(1)
