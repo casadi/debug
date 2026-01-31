@@ -77,7 +77,7 @@ jobs:
       - name: Set up MATLAB
         uses: matlab-actions/setup-matlab@v2
         with:
-          release: R2024b
+          release: R2025a
 
       - name: Test plugin
         uses: matlab-actions/run-command@v2
