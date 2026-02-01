@@ -82,11 +82,22 @@ jobs:
         with:
           release: R2025a
 
+      - name: Create lldb wrapper for batch mode
+        run: |
+          mkdir -p ${{ github.workspace }}/bin
+          cat > ${{ github.workspace }}/bin/lldb << 'WRAPPER'
+          #!/bin/bash
+          /usr/bin/lldb --batch -o "run" -k "bt all" -k "quit 1" -- "$@"
+          WRAPPER
+          chmod +x ${{ github.workspace }}/bin/lldb
+
       - name: Test sysid_debug (hessLag eval before Ipopt)
         uses: matlab-actions/run-command@v2
         with:
           command: addpath('${{ github.workspace }}/casadi'); sysid_debug
           startup-options: -Dlldb
+        env:
+          PATH: ${{ github.workspace }}/bin:$PATH
 
       - name: Collect crash reports
         if: failure()
