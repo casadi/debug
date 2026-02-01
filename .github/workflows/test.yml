@@ -72,7 +72,7 @@ jobs:
 
       - name: Download CasADi nightly
         run: |
-          wget https://github.com/casadi/casadi/releases/download/nightly-no_thread_local2/casadi-no_thread_local2-osx-arm64-matlab2018b.zip -O casadi.zip
+          wget https://github.com/casadi/casadi/releases/download/nightly-main/casadi-main-osx-arm64-matlab2018b.zip -O casadi.zip
 
       - name: Unpack
         run: unzip casadi.zip -d casadi
@@ -90,14 +90,13 @@ jobs:
           /usr/bin/lldb --batch -o "run" -k "bt all" -k "quit 1" -- "$@"
           WRAPPER
           chmod +x ${{ github.workspace }}/bin/lldb
+          echo "${{ github.workspace }}/bin" >> $GITHUB_PATH
 
       - name: Test sysid_debug (hessLag eval before Ipopt)
         uses: matlab-actions/run-command@v2
         with:
           command: addpath('${{ github.workspace }}/casadi'); sysid_debug
           startup-options: -Dlldb
-        env:
-          PATH: ${{ github.workspace }}/bin:$PATH
 
       - name: Collect crash reports
         if: failure()
