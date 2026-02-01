@@ -17,7 +17,7 @@ jobs:
 
       - name: Download CasADi nightly
         run: |
-          wget https://github.com/casadi/casadi/releases/download/nightly-main/casadi-main-osx-arm64-matlab2018b.zip -O casadi.zip
+          wget https://github.com/casadi/casadi/releases/download/nightly-relwithdebinfo-debug/casadi-relwithdebinfo-debug-osx-arm64-matlab2018b.zip -O casadi.zip
 
       - name: Unpack
         run: unzip casadi.zip -d casadi
