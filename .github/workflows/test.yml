@@ -82,16 +82,17 @@ jobs:
         with:
           release: R2025a
 
-      - name: Enable core dumps and setup lldb
+      - name: Enable core dumps and setup lldb wrapper
         run: |
           ulimit -c unlimited
           sudo sysctl kern.coredump=1 || true
-          cat > ~/.lldbinit << 'EOF'
-          settings set auto-confirm true
-          process handle SIGSEGV SIGBUS --notify true --pass false --stop true
-          breakpoint set --name abort
-          run
-          EOF
+          mkdir -p ${{ github.workspace }}/bin
+          cat > ${{ github.workspace }}/bin/lldb << 'WRAPPER'
+          #!/bin/bash
+          /usr/bin/lldb -o "process handle SIGSEGV SIGBUS --notify true --pass false --stop true" -o "run" -k "bt all" -k "quit 1" "$@"
+          WRAPPER
+          chmod +x ${{ github.workspace }}/bin/lldb
+          echo "${{ github.workspace }}/bin" >> $GITHUB_PATH
 
       - name: Test sysid
         uses: matlab-actions/run-command@v2
