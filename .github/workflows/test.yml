@@ -24,7 +24,7 @@ jobs:
 
       - name: Test issue 4274 - thread map with IO
         run: |
-          $env:PYTHONPATH = "${{ github.workspace }}\casadi_pkg\casadi"
+          $env:PYTHONPATH = "${{ github.workspace }}\casadi_pkg"
           python test_issue_4274.py
 
   test-nightly:
