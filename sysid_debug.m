@@ -97,15 +97,13 @@ n_x = size(V, 1);
 n_g = numel(gaps);
 
 x_test = rand(n_x, 1);
-p_test = [];  % no parameters
-lam_f_test = 1.0;
 lam_g_test = rand(n_g, 1);
 
 disp(['n_x = ' num2str(n_x)]);
 disp(['n_g = ' num2str(n_g)]);
 
-disp('Calling hessLag...');
-H_result = hessLag(x_test, p_test, lam_f_test, lam_g_test);
+disp('Calling hessLag with keyword args...');
+H_result = hessLag('x', x_test, 'lam_f', 1.0, 'lam_g', lam_g_test);
 disp('hessLag evaluation succeeded!');
 disp(['Result size: ' num2str(size(H_result,1)) ' x ' num2str(size(H_result,2))]);
 disp(['Result nnz: ' num2str(nnz(H_result))]);
