@@ -102,7 +102,8 @@ disp(['n_x = ' num2str(n_x)]);
 disp('Calling hessLag with keyword args...');
 H_result = hessLag('x', x_test, 'lam_f', 1.0);
 disp('hessLag evaluation succeeded!');
-disp(['Result size: ' num2str(size(H_result,1)) ' x ' num2str(size(H_result,2))]);
-disp(['Result nnz: ' num2str(nnz(H_result))]);
+H_mat = H_result.hess_gamma_x_x;
+disp(['Result size: ' num2str(size(H_mat,1)) ' x ' num2str(size(H_mat,2))]);
+disp(['Result nnz: ' num2str(nnz(H_mat))]);
 
 disp('Test complete - no crash during hessLag evaluation');
