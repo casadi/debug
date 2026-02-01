@@ -5,6 +5,28 @@ on:
   workflow_dispatch:
 
 jobs:
+  test-issue-4274:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4.1.1
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Download CasADi no_thread_local2 nightly
+        run: |
+          C:\msys64\usr\bin\wget.exe https://github.com/casadi/casadi/releases/download/nightly-no_thread_local2/casadi-no_thread_local2-windows64-py311.zip -O casadi.zip
+
+      - name: Unpack
+        run: unzip casadi.zip -d casadi_pkg
+
+      - name: Test issue 4274 - thread map with IO
+        run: |
+          $env:PYTHONPATH = "${{ github.workspace }}\casadi_pkg\casadi"
+          python test_issue_4274.py
+
   test-nightly:
     runs-on: windows-2022
     steps:
