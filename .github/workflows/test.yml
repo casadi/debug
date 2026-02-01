@@ -25,56 +25,11 @@ jobs:
         with:
           release: R2025a
 
-      - name: Create lldb wrapper in /usr/local/bin
-        run: |
-          # Create wrapper that properly separates lldb options from target args
-          cat > /tmp/lldb_wrapper << 'WRAPPER'
-          #!/bin/bash
-          # Wrapper for lldb that automatically runs and captures backtraces
-          echo "=== LLDB Wrapper Starting ===" >&2
-          echo "All args: $@" >&2
-
-          # First arg is the MATLAB binary, rest are MATLAB args
-          MATLAB_BIN="$1"
-          shift
-          MATLAB_ARGS="$@"
-
-          echo "MATLAB binary: $MATLAB_BIN" >&2
-          echo "MATLAB args: $MATLAB_ARGS" >&2
-
-          # Run lldb with:
-          # - Auto-confirm settings
-          # - Signal handling to stop on SIGSEGV/SIGBUS
-          # - Auto-run
-          # - On crash: print backtrace and quit
-          # Use -- to separate lldb options from target program
-          /usr/bin/lldb \
-            -o "settings set auto-confirm true" \
-            -o "process handle SIGSEGV SIGBUS --notify true --pass true --stop true" \
-            -o "run" \
-            -k "thread backtrace all" \
-            -k "register read" \
-            -k "quit 1" \
-            -- "$MATLAB_BIN" $MATLAB_ARGS
-          WRAPPER
-          chmod +x /tmp/lldb_wrapper
-
-          # Copy to /usr/local/bin (writable on macOS)
-          sudo mkdir -p /usr/local/bin
-          sudo cp /tmp/lldb_wrapper /usr/local/bin/lldb_wrapper
-          sudo chmod +x /usr/local/bin/lldb_wrapper
-
-          # Verify
-          echo "=== Wrapper installed ==="
-          ls -la /usr/local/bin/lldb_wrapper
-          cat /usr/local/bin/lldb_wrapper
-
-      - name: Test sysid with custom lldb wrapper
+      - name: Test sysid - let crash happen and collect logs
         uses: matlab-actions/run-command@v2
         continue-on-error: true
         with:
           command: addpath('${{ github.workspace }}/casadi'); cd('casadi_src/docs/examples/matlab'); sysid
-          startup-options: -D/usr/local/bin/lldb_wrapper
 
       - name: Collect crash info
         if: always()
@@ -84,8 +39,38 @@ jobs:
           find /cores -name "core.*" 2>/dev/null | head -5 || true
 
           echo ""
-          echo "=== Recent .ips files (crash reports) ==="
-          find /Library/Logs/DiagnosticReports -name "*.ips" -mmin -30 2>/dev/null | while read f; do
+          echo "=== MATLAB crash logs ==="
+          # MATLAB stores crash logs in various locations
+          find /Users/runner -name "*.log" -path "*MATLAB*" -mmin -30 2>/dev/null | head -20 || true
+          find /Users/runner -name "*crash*" -mmin -30 2>/dev/null | head -20 || true
+
+          # Check MATLAB's crash log directory
+          MATLAB_CRASH_DIR="$HOME/.matlab"
+          if [ -d "$MATLAB_CRASH_DIR" ]; then
+            echo "=== MATLAB user directory ==="
+            find "$MATLAB_CRASH_DIR" -type f -mmin -30 2>/dev/null | head -20
+            # Print any recent crash logs
+            find "$MATLAB_CRASH_DIR" -name "*crash*" -o -name "*.log" 2>/dev/null | while read f; do
+              echo "=== $f ==="
+              cat "$f" 2>/dev/null | head -500
+            done
+          fi
+
+          echo ""
+          echo "=== System crash reports ==="
+          # Check for .ips files (newer crash report format)
+          find /Library/Logs/DiagnosticReports ~/Library/Logs/DiagnosticReports -name "*.ips" -mmin -30 2>/dev/null | while read f; do
             echo "=== $f ==="
-            head -300 "$f" 2>/dev/null || echo "Could not read $f"
+            cat "$f" 2>/dev/null | head -500
           done
+
+          # Check for .crash files (older format)
+          find /Library/Logs/DiagnosticReports ~/Library/Logs/DiagnosticReports -name "*.crash" -mmin -30 2>/dev/null | while read f; do
+            echo "=== $f ==="
+            cat "$f" 2>/dev/null | head -500
+          done
+
+          echo ""
+          echo "=== List all recent diagnostic reports ==="
+          ls -la /Library/Logs/DiagnosticReports/ 2>/dev/null | tail -20
+          ls -la ~/Library/Logs/DiagnosticReports/ 2>/dev/null | tail -20
