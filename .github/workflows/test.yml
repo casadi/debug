@@ -25,41 +25,59 @@ jobs:
         with:
           release: R2025a
 
-      - name: Enable core dumps
+      - name: Create lldb wrapper in /usr/local/bin
         run: |
-          # Try to enable core dumps
-          ulimit -c unlimited || true
-          sudo sysctl kern.coredump=1 || true
-          # Check core dump settings
-          ulimit -a
-          sysctl kern.coredump || true
+          # Create wrapper that auto-runs and prints backtrace on crash
+          cat > /tmp/lldb_wrapper << 'WRAPPER'
+          #!/bin/bash
+          # Wrapper for lldb that automatically runs and captures backtraces
+          echo "=== LLDB Wrapper Starting ==="
+          echo "Args: $@"
 
-      - name: Test sysid - let it crash and generate crash report
+          # Run lldb with auto-run and stop-on-crash commands
+          /usr/bin/lldb \
+            -o "settings set auto-confirm true" \
+            -o "process handle SIGSEGV SIGBUS --notify true --pass true --stop true" \
+            -o "run" \
+            -k "bt all" \
+            -k "register read" \
+            -k "quit 1" \
+            "$@"
+          WRAPPER
+          chmod +x /tmp/lldb_wrapper
+
+          # Copy to /usr/local/bin (writable on macOS)
+          sudo mkdir -p /usr/local/bin
+          sudo cp /tmp/lldb_wrapper /usr/local/bin/lldb_wrapper
+          sudo chmod +x /usr/local/bin/lldb_wrapper
+
+          # Verify
+          echo "=== Wrapper installed ==="
+          ls -la /usr/local/bin/lldb_wrapper
+          cat /usr/local/bin/lldb_wrapper
+
+      - name: Test sysid with custom lldb wrapper
         uses: matlab-actions/run-command@v2
         continue-on-error: true
         with:
           command: addpath('${{ github.workspace }}/casadi'); cd('casadi_src/docs/examples/matlab'); sysid
+          startup-options: -D/usr/local/bin/lldb_wrapper
 
       - name: Collect crash info
         if: always()
         run: |
           echo "=== Core dumps ==="
-          ls -la /cores/ 2>/dev/null || echo "No /cores directory"
+          ls -la /cores/ 2>/dev/null || echo "No /cores directory or empty"
           find /cores -name "core.*" 2>/dev/null | head -5 || true
 
           echo ""
-          echo "=== Recent crash reports (full) ==="
-          # Get user crash reports (may have better access)
-          find ~/Library/Logs/DiagnosticReports -type f -mmin -30 2>/dev/null || true
-
-          # Get system crash reports
-          find /Library/Logs/DiagnosticReports -type f -mmin -30 2>/dev/null | while read f; do
-            echo ""
-            echo "====== $f ======"
-            cat "$f" 2>/dev/null || head -500 "$f" 2>/dev/null || echo "Could not read $f"
-          done
+          echo "=== Check for MATLAB-related crash logs ==="
+          find /Library/Logs/DiagnosticReports -name "*MATLAB*" -o -name "*matlab*" -mmin -30 2>/dev/null | head -10 || true
+          find ~/Library/Logs/DiagnosticReports -name "*MATLAB*" -o -name "*matlab*" -mmin -30 2>/dev/null | head -10 || true
 
           echo ""
-          echo "=== Check for any crash logs ==="
-          ls -la ~/Library/Logs/DiagnosticReports/ 2>/dev/null || true
-          ls -la /Library/Logs/DiagnosticReports/ 2>/dev/null || true
+          echo "=== Recent .ips files (crash reports) ==="
+          find /Library/Logs/DiagnosticReports -name "*.ips" -mmin -30 2>/dev/null | while read f; do
+            echo "=== $f ==="
+            head -300 "$f" 2>/dev/null || echo "Could not read $f"
+          done
