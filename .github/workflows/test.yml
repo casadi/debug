@@ -147,6 +147,15 @@ jobs:
         with:
           command: addpath('${{ github.workspace }}/casadi'); cd('casadi_src/docs/examples/matlab'); sysid
 
+      - name: Collect crash reports
+        if: failure()
+        run: |
+          echo "=== System crash reports ==="
+          ls -la /Library/Logs/DiagnosticReports/ 2>/dev/null || true
+          ls -la ~/Library/Logs/DiagnosticReports/ 2>/dev/null || true
+          echo "=== Recent MATLAB crash reports ==="
+          find /Library/Logs/DiagnosticReports ~/Library/Logs/DiagnosticReports -name "*MATLAB*" -mmin -10 2>/dev/null | head -5 | xargs -I{} sh -c 'echo "=== {} ===" && cat "{}"' || true
+
       - name: Test vdp_indirect_multiple_shooting
         uses: matlab-actions/run-command@v2
         with:
