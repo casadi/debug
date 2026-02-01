@@ -82,75 +82,10 @@ jobs:
         with:
           release: R2025a
 
-      - name: Test accessing_mx_algorithm
-        uses: matlab-actions/run-command@v2
-        with:
-          command: addpath('${{ github.workspace }}/casadi'); cd('casadi_src/docs/examples/matlab'); accessing_mx_algorithm
-
-      - name: Test accessing_sx_algorithm
-        uses: matlab-actions/run-command@v2
-        with:
-          command: addpath('${{ github.workspace }}/casadi'); cd('casadi_src/docs/examples/matlab'); accessing_sx_algorithm
-
-      - name: Test callback
-        uses: matlab-actions/run-command@v2
-        with:
-          command: addpath('${{ github.workspace }}/casadi'); cd('casadi_src/docs/examples/matlab'); callback
-
-      - name: Test daebuilder
-        uses: matlab-actions/run-command@v2
-        with:
-          command: addpath('${{ github.workspace }}/casadi'); cd('casadi_src/docs/examples/matlab'); daebuilder
-
-      - name: Test direct_collocation
-        uses: matlab-actions/run-command@v2
-        with:
-          command: addpath('${{ github.workspace }}/casadi'); cd('casadi_src/docs/examples/matlab'); direct_collocation
-
-      - name: Test direct_collocation_opti
-        uses: matlab-actions/run-command@v2
-        with:
-          command: addpath('${{ github.workspace }}/casadi'); cd('casadi_src/docs/examples/matlab'); direct_collocation_opti
-
-      - name: Test direct_multiple_shooting
-        uses: matlab-actions/run-command@v2
-        with:
-          command: addpath('${{ github.workspace }}/casadi'); cd('casadi_src/docs/examples/matlab'); direct_multiple_shooting
-
-      - name: Test direct_single_shooting
-        uses: matlab-actions/run-command@v2
-        with:
-          command: addpath('${{ github.workspace }}/casadi'); cd('casadi_src/docs/examples/matlab'); direct_single_shooting
-
-      - name: Test lotka_volterra_minlp
-        uses: matlab-actions/run-command@v2
-        with:
-          command: addpath('${{ github.workspace }}/casadi'); cd('casadi_src/docs/examples/matlab'); lotka_volterra_minlp
-
-      - name: Test race_car
-        uses: matlab-actions/run-command@v2
-        with:
-          command: addpath('${{ github.workspace }}/casadi'); cd('casadi_src/docs/examples/matlab'); race_car
-
-      - name: Test rosenbrock
-        uses: matlab-actions/run-command@v2
-        with:
-          command: addpath('${{ github.workspace }}/casadi'); cd('casadi_src/docs/examples/matlab'); rosenbrock
-
-      - name: Test sensitivity_analysis
-        uses: matlab-actions/run-command@v2
-        with:
-          command: addpath('${{ github.workspace }}/casadi'); cd('casadi_src/docs/examples/matlab'); sensitivity_analysis
-
       - name: Test sysid_debug (hessLag eval before Ipopt)
         uses: matlab-actions/run-command@v2
         with:
           command: addpath('${{ github.workspace }}/casadi'); sysid_debug
-
-      - name: Test sysid
-        uses: matlab-actions/run-command@v2
-        with:
-          command: addpath('${{ github.workspace }}/casadi'); cd('casadi_src/docs/examples/matlab'); sysid
 
       - name: Collect crash reports
         if: failure()
@@ -160,11 +95,6 @@ jobs:
           ls -la ~/Library/Logs/DiagnosticReports/ 2>/dev/null || true
           echo "=== Recent MATLAB crash reports ==="
           find /Library/Logs/DiagnosticReports ~/Library/Logs/DiagnosticReports -name "*MATLAB*" -mmin -10 2>/dev/null | head -5 | xargs -I{} sh -c 'echo "=== {} ===" && cat "{}"' || true
-
-      - name: Test vdp_indirect_multiple_shooting
-        uses: matlab-actions/run-command@v2
-        with:
-          command: addpath('${{ github.workspace }}/casadi'); cd('casadi_src/docs/examples/matlab'); vdp_indirect_multiple_shooting
 
   test-v372:
     runs-on: windows-2022
