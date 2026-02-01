@@ -7,6 +7,8 @@ on:
 jobs:
   test-matlab-macos-arm64:
     runs-on: macos-14
+    env:
+      MW_CRASH_MODE: native
     steps:
       - uses: actions/checkout@v4.1.1
 
@@ -26,22 +28,18 @@ jobs:
           release: R2025a
 
       - name: Run sysid with MW_CRASH_MODE=native
+        uses: matlab-actions/run-command@v2
         continue-on-error: true
+        env:
+          MW_CRASH_MODE: native
+        with:
+          command: addpath('${{ github.workspace }}/casadi'); cd('casadi_src/docs/examples/matlab'); sysid
+
+      - name: Wait for crash report generation
+        if: always()
         run: |
-          # Set MW_CRASH_MODE=native to get native macOS crash reports
-          # This tells MATLAB to use the OS crash handler instead of its own
-          export MW_CRASH_MODE=native
-
-          echo "Starting MATLAB with MW_CRASH_MODE=$MW_CRASH_MODE"
-
-          # Find MATLAB path
-          MATLAB_PATH="/Users/runner/hostedtoolcache/MATLAB/2025.1.999/arm64/MATLAB.app/bin/matlab"
-
-          # Run MATLAB directly with the sysid command
-          $MATLAB_PATH -batch "addpath('${{ github.workspace }}/casadi'); cd('casadi_src/docs/examples/matlab'); sysid" || true
-
-          echo "MATLAB exited, waiting for crash report to be generated..."
-          sleep 10
+          echo "Waiting for macOS to generate crash report..."
+          sleep 15
 
       - name: Collect crash info
         if: always()
@@ -61,30 +59,24 @@ jobs:
           done
 
           echo ""
-          echo "=== MATLAB .matlab directory ==="
-          find ~/.matlab -type f -mmin -30 2>/dev/null | head -20 || true
-
-          # Check for minidump files
-          find ~/.matlab -name "*.dmp" 2>/dev/null | while read f; do
-            echo "=== Minidump: $f ==="
-            ls -la "$f"
-          done
-
-          echo ""
           echo "=== System crash reports - .ips files ==="
           find /Library/Logs/DiagnosticReports ~/Library/Logs/DiagnosticReports -name "*.ips" -mmin -30 2>/dev/null | while read f; do
             echo "=== $f ==="
-            cat "$f" 2>/dev/null | head -800
+            cat "$f" 2>/dev/null
           done
 
           echo ""
           echo "=== System crash reports - .crash files ==="
           find /Library/Logs/DiagnosticReports ~/Library/Logs/DiagnosticReports -name "*.crash" -mmin -30 2>/dev/null | while read f; do
             echo "=== $f ==="
-            cat "$f" 2>/dev/null | head -800
+            cat "$f" 2>/dev/null
           done
 
           echo ""
           echo "=== List all diagnostic reports ==="
           ls -la /Library/Logs/DiagnosticReports/ 2>/dev/null | tail -30
           ls -la ~/Library/Logs/DiagnosticReports/ 2>/dev/null | tail -30
+
+          echo ""
+          echo "=== Check for MATLAB-specific crash reports ==="
+          find /Library/Logs/DiagnosticReports ~/Library/Logs/DiagnosticReports -name "*MATLAB*" -o -name "*matlab*" 2>/dev/null | head -20
