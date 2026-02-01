@@ -20,6 +20,6 @@ function solver = sysid_gauss_newton_patched(e,nlp,V)
   opts.hess_lag = hessLag;
   % Use AMD ordering (0) instead of automatic (7) to avoid METIS 4.0.3 bug
   % ICNTL(7) values: 0=AMD, 5=METIS, 7=automatic
-  opts.ipopt.mumps_pivot_order = 0;
+  % opts.ipopt.mumps_pivot_order = 0;
   solver = casadi.nlpsol('solver','ipopt', nlp, opts);
 end
