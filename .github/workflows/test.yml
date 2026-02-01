@@ -142,6 +142,11 @@ jobs:
         with:
           command: addpath('${{ github.workspace }}/casadi'); cd('casadi_src/docs/examples/matlab'); sensitivity_analysis
 
+      - name: Test sysid_debug (hessLag eval before Ipopt)
+        uses: matlab-actions/run-command@v2
+        with:
+          command: addpath('${{ github.workspace }}/casadi'); sysid_debug
+
       - name: Test sysid
         uses: matlab-actions/run-command@v2
         with:
