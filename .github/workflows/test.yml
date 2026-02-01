@@ -80,3 +80,72 @@ jobs:
           echo ""
           echo "=== Check for MATLAB-specific crash reports ==="
           find /Library/Logs/DiagnosticReports ~/Library/Logs/DiagnosticReports -name "*MATLAB*" -o -name "*matlab*" 2>/dev/null | head -20
+
+      - name: Symbolicate crash dump
+        if: always()
+        run: |
+          python3 << 'EOF'
+          import re
+          import subprocess
+          import os
+          from pathlib import Path
+
+          # Find the crash dump
+          crash_files = list(Path.home().glob("matlab_crash_dump*"))
+          if not crash_files:
+              print("No crash dump found")
+              exit(0)
+
+          crash_file = max(crash_files, key=lambda f: f.stat().st_mtime)
+          print(f"=== Symbolicating {crash_file} ===\n")
+
+          content = crash_file.read_text()
+
+          # Pattern for stack frames like:
+          # [ 12] 0x000000012b17d4d0 /path/to/lib.dylib+00201936 __func+00000108
+          pattern = r'\[\s*(\d+)\]\s+(0x[0-9a-fA-F]+)\s+(/[^\s]+\.dylib)\+(\d+)\s+(\S+)'
+
+          casadi_dir = Path("${{ github.workspace }}/casadi")
+
+          print("=== Symbolicated Stack Trace ===\n")
+
+          for match in re.finditer(pattern, content):
+              frame_num = match.group(1)
+              runtime_addr = match.group(2)
+              lib_path = match.group(3)
+              offset = int(match.group(4))
+              func_name = match.group(5)
+
+              # Only symbolicate our libraries
+              if "/casadi/" not in lib_path:
+                  print(f"[{frame_num:>3}] {func_name} (system library)")
+                  continue
+
+              # Find dSYM
+              lib_name = Path(lib_path).name
+              dsym_path = casadi_dir / f"{lib_name}.dSYM" / "Contents" / "Resources" / "DWARF" / lib_name
+
+              if not dsym_path.exists():
+                  print(f"[{frame_num:>3}] {func_name} (no dSYM for {lib_name})")
+                  continue
+
+              # Calculate load address
+              runtime_int = int(runtime_addr, 16)
+              load_addr = hex(runtime_int - offset)
+
+              # Use atos to symbolicate
+              try:
+                  result = subprocess.run(
+                      ["atos", "-o", str(dsym_path), "-l", load_addr, runtime_addr],
+                      capture_output=True, text=True, timeout=10
+                  )
+                  symbolicated = result.stdout.strip()
+                  if symbolicated and "atos cannot" not in symbolicated:
+                      print(f"[{frame_num:>3}] {symbolicated}")
+                  else:
+                      print(f"[{frame_num:>3}] {func_name} @ {lib_name}+{offset}")
+              except Exception as e:
+                  print(f"[{frame_num:>3}] {func_name} @ {lib_name}+{offset} (atos error: {e})")
+
+          print("\n=== End Symbolicated Stack Trace ===")
+          EOF
