@@ -27,13 +27,13 @@ jobs:
         with:
           release: R2025a
 
-      - name: Run sysid with MW_CRASH_MODE=native
+      - name: Run sysid_patched with AMD ordering (workaround for METIS bug)
         uses: matlab-actions/run-command@v2
         continue-on-error: true
         env:
           MW_CRASH_MODE: native
         with:
-          command: addpath('${{ github.workspace }}/casadi'); cd('casadi_src/docs/examples/matlab'); sysid
+          command: addpath('${{ github.workspace }}/casadi'); addpath('${{ github.workspace }}'); sysid_patched
 
       - name: Wait for crash report generation
         if: always()
