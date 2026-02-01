@@ -25,32 +25,41 @@ jobs:
         with:
           release: R2025a
 
-      - name: Hack lldb - replace system lldb with wrapper
+      - name: Enable core dumps
         run: |
-          # Create wrapper that auto-runs and prints backtrace on crash
-          cat > /tmp/lldb_wrapper << 'WRAPPER'
-          #!/bin/bash
-          exec /usr/bin/lldb.real -o "run" -k "thread backtrace all" -k "quit 1" "$@"
-          WRAPPER
-          chmod +x /tmp/lldb_wrapper
-          # Replace system lldb
-          sudo mv /usr/bin/lldb /usr/bin/lldb.real
-          sudo cp /tmp/lldb_wrapper /usr/bin/lldb
-          sudo chmod +x /usr/bin/lldb
+          # Try to enable core dumps
+          ulimit -c unlimited || true
+          sudo sysctl kern.coredump=1 || true
+          # Check core dump settings
+          ulimit -a
+          sysctl kern.coredump || true
 
-      - name: Test sysid with lldb
+      - name: Test sysid - let it crash and generate crash report
         uses: matlab-actions/run-command@v2
+        continue-on-error: true
         with:
           command: addpath('${{ github.workspace }}/casadi'); cd('casadi_src/docs/examples/matlab'); sysid
-          startup-options: -Dlldb
 
       - name: Collect crash info
         if: always()
         run: |
-          echo "=== Check lldb wrapper ==="
-          cat /usr/bin/lldb
-          which lldb
           echo "=== Core dumps ==="
+          ls -la /cores/ 2>/dev/null || echo "No /cores directory"
           find /cores -name "core.*" 2>/dev/null | head -5 || true
-          echo "=== Recent crash reports ==="
-          find /Library/Logs/DiagnosticReports -type f -mmin -10 2>/dev/null | head -10 | xargs -I{} sh -c 'echo "=== {} ===" && head -300 "{}"' || true
+
+          echo ""
+          echo "=== Recent crash reports (full) ==="
+          # Get user crash reports (may have better access)
+          find ~/Library/Logs/DiagnosticReports -type f -mmin -30 2>/dev/null || true
+
+          # Get system crash reports
+          find /Library/Logs/DiagnosticReports -type f -mmin -30 2>/dev/null | while read f; do
+            echo ""
+            echo "====== $f ======"
+            cat "$f" 2>/dev/null || head -500 "$f" 2>/dev/null || echo "Could not read $f"
+          done
+
+          echo ""
+          echo "=== Check for any crash logs ==="
+          ls -la ~/Library/Logs/DiagnosticReports/ 2>/dev/null || true
+          ls -la /Library/Logs/DiagnosticReports/ 2>/dev/null || true
