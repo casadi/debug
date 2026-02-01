@@ -82,6 +82,11 @@ jobs:
         with:
           release: R2025a
 
+      - name: Enable core dumps
+        run: |
+          ulimit -c unlimited
+          sudo sysctl kern.coredump=1 || true
+
       - name: Test sysid
         uses: matlab-actions/run-command@v2
         with:
@@ -90,11 +95,14 @@ jobs:
       - name: Collect crash reports
         if: failure()
         run: |
+          echo "=== Looking for core dumps ==="
+          find /cores -name "core.*" 2>/dev/null | head -5 | xargs -I{} sh -c 'echo "=== {} ===" && lldb --batch -o "bt all" -c "{}"' || true
           echo "=== System crash reports ==="
           ls -la /Library/Logs/DiagnosticReports/ 2>/dev/null || true
-          ls -la ~/Library/Logs/DiagnosticReports/ 2>/dev/null || true
-          echo "=== Recent MATLAB crash reports ==="
-          find /Library/Logs/DiagnosticReports ~/Library/Logs/DiagnosticReports -name "*MATLAB*" -mmin -10 2>/dev/null | head -5 | xargs -I{} sh -c 'echo "=== {} ===" && cat "{}"' || true
+          echo "=== Recent crash reports (last 5 min) ==="
+          find /Library/Logs/DiagnosticReports -type f -mmin -5 2>/dev/null | head -10 | xargs -I{} sh -c 'echo "=== {} ===" && head -200 "{}"' || true
+          echo "=== Any .crash or .diag files ==="
+          find /tmp ~/Library/Logs -name "*.crash" -o -name "*.diag" 2>/dev/null | head -5 | xargs -I{} sh -c 'echo "=== {} ===" && head -200 "{}"' || true
 
   test-v372:
     runs-on: windows-2022
