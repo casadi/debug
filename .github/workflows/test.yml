@@ -5,63 +5,6 @@ on:
   workflow_dispatch:
 
 jobs:
-  test-issue-4274:
-    runs-on: windows-2022
-    steps:
-      - uses: actions/checkout@v4.1.1
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-
-      - name: Download CasADi no_thread_local2 nightly
-        run: |
-          C:\msys64\usr\bin\wget.exe https://github.com/casadi/casadi/releases/download/nightly-no_thread_local2/casadi-no_thread_local2-windows64-py311.zip -O casadi.zip
-
-      - name: Unpack
-        run: unzip casadi.zip -d casadi_pkg
-
-      - name: Install numpy
-        run: pip install numpy
-
-      - name: Test issue 4274 - thread map with IO
-        run: |
-          $env:PYTHONPATH = "${{ github.workspace }}\casadi_pkg"
-          python test_issue_4274.py
-
-  test-nightly:
-    runs-on: windows-2022
-    steps:
-      - uses: actions/checkout@v4.1.1
-
-      - name: Download CasADi nightly
-        run: |
-          C:\msys64\usr\bin\wget.exe https://github.com/casadi/casadi/releases/download/nightly-main/casadi-main-windows64-matlab2018b.zip -O casadi.zip
-
-      - name: Unpack
-        run: unzip casadi.zip -d casadi
-
-      - name: Set up MATLAB
-        uses: matlab-actions/setup-matlab@v2
-        with:
-          release: R2025a
-
-      - name: Diag - clear mex then quit
-        uses: matlab-actions/run-command@v2
-        with:
-          command: addpath('${{ github.workspace }}/casadi'); test_single_plugin('Integrator::rk'); clear mex; pause(1)
-
-      - name: Diag - clear all then quit
-        uses: matlab-actions/run-command@v2
-        with:
-          command: addpath('${{ github.workspace }}/casadi'); test_single_plugin('Integrator::rk'); clear all; pause(1)
-
-      - name: Diag - just quit
-        uses: matlab-actions/run-command@v2
-        with:
-          command: addpath('${{ github.workspace }}/casadi'); test_single_plugin('Integrator::rk')
-
   test-matlab-macos-arm64:
     runs-on: macos-14
     steps:
@@ -82,78 +25,32 @@ jobs:
         with:
           release: R2025a
 
-      - name: Enable core dumps and setup lldb wrapper
+      - name: Hack lldb - replace system lldb with wrapper
         run: |
-          ulimit -c unlimited
-          sudo sysctl kern.coredump=1 || true
-          mkdir -p ${{ github.workspace }}/bin
-          cat > ${{ github.workspace }}/bin/lldb << 'WRAPPER'
-          #!/usr/bin/expect -f
-          set timeout -1
-          spawn /usr/bin/lldb {*}$argv
-          expect "(lldb)"
-          send "run\r"
-          expect {
-            "Process * exited" {
-              send "quit\r"
-            }
-            "stop reason" {
-              send "bt all\r"
-              expect "(lldb)"
-              send "quit\r"
-            }
-          }
-          expect eof
+          # Create wrapper that auto-runs and prints backtrace on crash
+          cat > /tmp/lldb_wrapper << 'WRAPPER'
+          #!/bin/bash
+          exec /usr/bin/lldb.real -o "run" -k "thread backtrace all" -k "quit 1" "$@"
           WRAPPER
-          chmod +x ${{ github.workspace }}/bin/lldb
-          echo "${{ github.workspace }}/bin" >> $GITHUB_PATH
+          chmod +x /tmp/lldb_wrapper
+          # Replace system lldb
+          sudo mv /usr/bin/lldb /usr/bin/lldb.real
+          sudo cp /tmp/lldb_wrapper /usr/bin/lldb
+          sudo chmod +x /usr/bin/lldb
 
-      - name: Test sysid
+      - name: Test sysid with lldb
         uses: matlab-actions/run-command@v2
         with:
           command: addpath('${{ github.workspace }}/casadi'); cd('casadi_src/docs/examples/matlab'); sysid
           startup-options: -Dlldb
 
-      - name: Collect crash reports
-        if: failure()
+      - name: Collect crash info
+        if: always()
         run: |
-          echo "=== Looking for core dumps ==="
-          find /cores -name "core.*" 2>/dev/null | head -5 | xargs -I{} sh -c 'echo "=== {} ===" && lldb --batch -o "bt all" -c "{}"' || true
-          echo "=== System crash reports ==="
-          ls -la /Library/Logs/DiagnosticReports/ 2>/dev/null || true
-          echo "=== Recent crash reports (last 5 min) ==="
-          find /Library/Logs/DiagnosticReports -type f -mmin -5 2>/dev/null | head -10 | xargs -I{} sh -c 'echo "=== {} ===" && head -200 "{}"' || true
-          echo "=== Any .crash or .diag files ==="
-          find /tmp ~/Library/Logs -name "*.crash" -o -name "*.diag" 2>/dev/null | head -5 | xargs -I{} sh -c 'echo "=== {} ===" && head -200 "{}"' || true
-
-  test-v372:
-    runs-on: windows-2022
-    steps:
-      - uses: actions/checkout@v4.1.1
-
-      - name: Download CasADi 3.7.2
-        run: |
-          C:\msys64\usr\bin\wget.exe https://github.com/casadi/casadi/releases/download/3.7.2/casadi-3.7.2-windows64-matlab2018b.zip -O casadi.zip
-
-      - name: Unpack
-        run: unzip casadi.zip -d casadi
-
-      - name: Set up MATLAB
-        uses: matlab-actions/setup-matlab@v2
-        with:
-          release: R2025a
-
-      - name: Diag - clear mex then quit
-        uses: matlab-actions/run-command@v2
-        with:
-          command: addpath('${{ github.workspace }}/casadi'); test_single_plugin('Integrator::rk'); clear mex; pause(1)
-
-      - name: Diag - clear all then quit
-        uses: matlab-actions/run-command@v2
-        with:
-          command: addpath('${{ github.workspace }}/casadi'); test_single_plugin('Integrator::rk'); clear all; pause(1)
-
-      - name: Diag - just quit
-        uses: matlab-actions/run-command@v2
-        with:
-          command: addpath('${{ github.workspace }}/casadi'); test_single_plugin('Integrator::rk')
+          echo "=== Check lldb wrapper ==="
+          cat /usr/bin/lldb
+          which lldb
+          echo "=== Core dumps ==="
+          find /cores -name "core.*" 2>/dev/null | head -5 || true
+          echo "=== Recent crash reports ==="
+          find /Library/Logs/DiagnosticReports -type f -mmin -10 2>/dev/null | head -10 | xargs -I{} sh -c 'echo "=== {} ===" && head -300 "{}"' || true
