@@ -88,9 +88,22 @@ jobs:
           sudo sysctl kern.coredump=1 || true
           mkdir -p ${{ github.workspace }}/bin
           cat > ${{ github.workspace }}/bin/lldb << 'WRAPPER'
-          #!/bin/bash
-          # Feed commands via stdin after a short delay for setup
-          (sleep 2; echo "run"; cat) | /usr/bin/lldb "$@"
+          #!/usr/bin/expect -f
+          set timeout -1
+          spawn /usr/bin/lldb {*}$argv
+          expect "(lldb)"
+          send "run\r"
+          expect {
+            "Process * exited" {
+              send "quit\r"
+            }
+            "stop reason" {
+              send "bt all\r"
+              expect "(lldb)"
+              send "quit\r"
+            }
+          }
+          expect eof
           WRAPPER
           chmod +x ${{ github.workspace }}/bin/lldb
           echo "${{ github.workspace }}/bin" >> $GITHUB_PATH
