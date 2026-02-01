@@ -82,10 +82,10 @@ jobs:
         with:
           release: R2025a
 
-      - name: Test sysid_debug (hessLag eval before Ipopt)
+      - name: Test sysid
         uses: matlab-actions/run-command@v2
         with:
-          command: addpath('${{ github.workspace }}/casadi'); sysid_debug
+          command: addpath('${{ github.workspace }}/casadi'); cd('casadi_src/docs/examples/matlab'); sysid
 
       - name: Collect crash reports
         if: failure()
