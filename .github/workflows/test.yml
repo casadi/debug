@@ -86,6 +86,7 @@ jobs:
         uses: matlab-actions/run-command@v2
         with:
           command: addpath('${{ github.workspace }}/casadi'); sysid_debug
+          startup-options: -Dlldb
 
       - name: Collect crash reports
         if: failure()
