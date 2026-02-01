@@ -89,7 +89,8 @@ jobs:
           mkdir -p ${{ github.workspace }}/bin
           cat > ${{ github.workspace }}/bin/lldb << 'WRAPPER'
           #!/bin/bash
-          /usr/bin/lldb -o "process handle SIGSEGV SIGBUS --notify true --pass false --stop true" -o "run" -k "bt all" -k "quit 1" "$@"
+          # Feed commands via stdin after a short delay for setup
+          (sleep 2; echo "run"; cat) | /usr/bin/lldb "$@"
           WRAPPER
           chmod +x ${{ github.workspace }}/bin/lldb
           echo "${{ github.workspace }}/bin" >> $GITHUB_PATH
