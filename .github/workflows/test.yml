@@ -82,15 +82,22 @@ jobs:
         with:
           release: R2025a
 
-      - name: Enable core dumps
+      - name: Enable core dumps and setup lldb
         run: |
           ulimit -c unlimited
           sudo sysctl kern.coredump=1 || true
+          cat > ~/.lldbinit << 'EOF'
+          settings set auto-confirm true
+          process handle SIGSEGV SIGBUS --notify true --pass false --stop true
+          breakpoint set --name abort
+          run
+          EOF
 
       - name: Test sysid
         uses: matlab-actions/run-command@v2
         with:
           command: addpath('${{ github.workspace }}/casadi'); cd('casadi_src/docs/examples/matlab'); sysid
+          startup-options: -Dlldb
 
       - name: Collect crash reports
         if: failure()
