@@ -103,7 +103,34 @@ jobs:
             echo "No dump file found"
           fi
 
-      # Memory debugging approach 3: leaks tool
+      # Memory debugging approach 3: Instruments/xctrace
+      - name: Run casadi-cli with Instruments (Allocations)
+        if: always()
+        continue-on-error: true
+        run: |
+          echo "=== Running casadi-cli with Instruments Allocations template ==="
+          export DYLD_LIBRARY_PATH="${{ github.workspace }}/casadi:$DYLD_LIBRARY_PATH"
+
+          # Find .casadi file and strip extension
+          DUMP_FILE=$(ls -t *.casadi 2>/dev/null | head -1)
+          if [ -n "$DUMP_FILE" ]; then
+            DUMP_BASE="${DUMP_FILE%.casadi}"
+            echo "Found dump file: $DUMP_FILE, passing base name: $DUMP_BASE"
+
+            # Use xctrace to record with Allocations template
+            xcrun xctrace record \
+              --template "Allocations" \
+              --output allocations.trace \
+              --launch -- "${{ github.workspace }}/casadi/casadi-cli" eval_dump "$DUMP_BASE" 2>&1 || echo "xctrace exited with code $?"
+
+            # Try to export summary
+            echo "=== Trace file created ==="
+            ls -la *.trace 2>/dev/null || echo "No trace files"
+          else
+            echo "No dump file found"
+          fi
+
+      # Memory debugging approach 4: leaks tool
       - name: Run casadi-cli with leaks detection
         if: always()
         continue-on-error: true
