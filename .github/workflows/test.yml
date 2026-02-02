@@ -1,4 +1,4 @@
-name: Test CasADi with ASAN
+name: Test CasADi with memory debugging
 
 on:
   push:
@@ -15,26 +15,26 @@ jobs:
       - name: Clone CasADi repo
         run: git clone --depth 1 https://github.com/casadi/casadi.git casadi_src
 
-      # Stage 1: Use CasADi from main branch to generate dumps
+      # Download CasADi from main branch
       - name: Download CasADi nightly (main branch)
         run: |
-          wget https://github.com/casadi/casadi/releases/download/nightly-main/casadi-main-osx-arm64-matlab2018b.zip -O casadi_main.zip
+          wget https://github.com/casadi/casadi/releases/download/nightly-main/casadi-main-osx-arm64-matlab2018b.zip -O casadi.zip
 
-      - name: Unpack main branch CasADi
-        run: unzip casadi_main.zip -d casadi_main
+      - name: Unpack CasADi
+        run: unzip casadi.zip -d casadi
 
       - name: Set up MATLAB
         uses: matlab-actions/setup-matlab@v2
         with:
           release: R2025a
 
-      - name: Run sysid_gauss_newton_patched with dump enabled (main branch CasADi)
+      - name: Run sysid_gauss_newton_patched with dump enabled
         uses: matlab-actions/run-command@v2
         continue-on-error: true
         env:
           MW_CRASH_MODE: native
         with:
-          command: addpath('${{ github.workspace }}/casadi_main'); addpath('${{ github.workspace }}'); sysid_patched
+          command: addpath('${{ github.workspace }}/casadi'); addpath('${{ github.workspace }}'); sysid_patched
 
       - name: List dump files
         if: always()
@@ -44,34 +44,68 @@ jobs:
           ls -la *.casadi 2>/dev/null || echo "No .casadi files in current dir"
           ls -la solver.in* 2>/dev/null || echo "No solver.in files in current dir"
 
-      # Stage 2: Use ASAN-enabled CasADi from debug branch to analyze dumps
-      - name: Download CasADi nightly (ASAN-enabled, debug branch)
+      # Memory debugging approach 1: Guard Malloc
+      - name: Run casadi-cli with Guard Malloc
         if: always()
+        continue-on-error: true
         run: |
-          wget https://github.com/casadi/casadi/releases/download/nightly-relwithdebinfo-debug/casadi-relwithdebinfo-debug-osx-arm64-matlab2018b.zip -O casadi_asan.zip
+          echo "=== Running casadi-cli eval_dump with Guard Malloc ==="
+          echo "Guard Malloc puts guard pages around allocations to catch buffer overruns"
+          export DYLD_LIBRARY_PATH="${{ github.workspace }}/casadi:$DYLD_LIBRARY_PATH"
 
-      - name: Unpack ASAN CasADi
-        if: always()
-        run: unzip casadi_asan.zip -d casadi_asan
-
-      - name: Run casadi-cli eval_dump with ASAN
-        if: always()
-        run: |
-          echo "=== Running casadi-cli eval_dump with ASAN ==="
-          export DYLD_LIBRARY_PATH="${{ github.workspace }}/casadi_asan:$DYLD_LIBRARY_PATH"
-
-          # Find the dump file
           DUMP_FILE=$(ls -t *.casadi 2>/dev/null | head -1)
           if [ -z "$DUMP_FILE" ]; then
-            echo "No .casadi dump file found, looking in other locations..."
             DUMP_FILE=$(find . -name "*.casadi" -type f 2>/dev/null | head -1)
           fi
 
           if [ -n "$DUMP_FILE" ]; then
             echo "Found dump file: $DUMP_FILE"
-            "${{ github.workspace }}/casadi_asan/casadi-cli" eval_dump "$DUMP_FILE" || echo "casadi-cli exited with code $?"
+            DYLD_INSERT_LIBRARIES=/usr/lib/libgmalloc.dylib \
+              "${{ github.workspace }}/casadi/casadi-cli" eval_dump "$DUMP_FILE" 2>&1 || echo "Guard Malloc run exited with code $?"
           else
-            echo "No dump file found to analyze"
+            echo "No dump file found"
+          fi
+
+      # Memory debugging approach 2: MallocScribble + MallocGuardEdges
+      - name: Run casadi-cli with MallocScribble
+        if: always()
+        continue-on-error: true
+        run: |
+          echo "=== Running casadi-cli eval_dump with MallocScribble ==="
+          echo "MallocScribble fills freed memory with 0x55, catches use-after-free"
+          export DYLD_LIBRARY_PATH="${{ github.workspace }}/casadi:$DYLD_LIBRARY_PATH"
+
+          DUMP_FILE=$(ls -t *.casadi 2>/dev/null | head -1)
+          if [ -z "$DUMP_FILE" ]; then
+            DUMP_FILE=$(find . -name "*.casadi" -type f 2>/dev/null | head -1)
+          fi
+
+          if [ -n "$DUMP_FILE" ]; then
+            echo "Found dump file: $DUMP_FILE"
+            MallocScribble=1 MallocGuardEdges=1 MallocErrorAbort=1 \
+              "${{ github.workspace }}/casadi/casadi-cli" eval_dump "$DUMP_FILE" 2>&1 || echo "MallocScribble run exited with code $?"
+          else
+            echo "No dump file found"
+          fi
+
+      # Memory debugging approach 3: leaks tool
+      - name: Run casadi-cli with leaks detection
+        if: always()
+        continue-on-error: true
+        run: |
+          echo "=== Running casadi-cli eval_dump with leaks detection ==="
+          export DYLD_LIBRARY_PATH="${{ github.workspace }}/casadi:$DYLD_LIBRARY_PATH"
+
+          DUMP_FILE=$(ls -t *.casadi 2>/dev/null | head -1)
+          if [ -z "$DUMP_FILE" ]; then
+            DUMP_FILE=$(find . -name "*.casadi" -type f 2>/dev/null | head -1)
+          fi
+
+          if [ -n "$DUMP_FILE" ]; then
+            echo "Found dump file: $DUMP_FILE"
+            leaks --atExit -- "${{ github.workspace }}/casadi/casadi-cli" eval_dump "$DUMP_FILE" 2>&1 || echo "leaks run exited with code $?"
+          else
+            echo "No dump file found"
           fi
 
       - name: Wait for crash report generation
@@ -116,10 +150,6 @@ jobs:
           ls -la /Library/Logs/DiagnosticReports/ 2>/dev/null | tail -30
           ls -la ~/Library/Logs/DiagnosticReports/ 2>/dev/null | tail -30
 
-          echo ""
-          echo "=== Check for MATLAB-specific crash reports ==="
-          find /Library/Logs/DiagnosticReports ~/Library/Logs/DiagnosticReports -name "*MATLAB*" -o -name "*matlab*" 2>/dev/null | head -20
-
       - name: Symbolicate crash dump
         if: always()
         run: |
@@ -144,7 +174,7 @@ jobs:
           # [ 12] 0x000000012b17d4d0 /path/to/lib.dylib+00201936 __func+00000108
           pattern = r'\[\s*(\d+)\]\s+(0x[0-9a-fA-F]+)\s+(/[^\s]+\.dylib)\+(\d+)\s+(\S+)'
 
-          casadi_dir = Path("${{ github.workspace }}/casadi_main")
+          casadi_dir = Path("${{ github.workspace }}/casadi")
 
           print("=== Symbolicated Stack Trace ===\n")
 
