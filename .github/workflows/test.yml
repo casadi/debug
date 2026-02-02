@@ -53,15 +53,13 @@ jobs:
           echo "Guard Malloc puts guard pages around allocations to catch buffer overruns"
           export DYLD_LIBRARY_PATH="${{ github.workspace }}/casadi:$DYLD_LIBRARY_PATH"
 
+          # Find .casadi file and strip extension (eval_dump adds .casadi itself)
           DUMP_FILE=$(ls -t *.casadi 2>/dev/null | head -1)
-          if [ -z "$DUMP_FILE" ]; then
-            DUMP_FILE=$(find . -name "*.casadi" -type f 2>/dev/null | head -1)
-          fi
-
           if [ -n "$DUMP_FILE" ]; then
-            echo "Found dump file: $DUMP_FILE"
+            DUMP_BASE="${DUMP_FILE%.casadi}"
+            echo "Found dump file: $DUMP_FILE, passing base name: $DUMP_BASE"
             DYLD_INSERT_LIBRARIES=/usr/lib/libgmalloc.dylib \
-              "${{ github.workspace }}/casadi/casadi-cli" eval_dump "$DUMP_FILE" 2>&1 || echo "Guard Malloc run exited with code $?"
+              "${{ github.workspace }}/casadi/casadi-cli" eval_dump "$DUMP_BASE" 2>&1 || echo "Guard Malloc run exited with code $?"
           else
             echo "No dump file found"
           fi
@@ -75,15 +73,13 @@ jobs:
           echo "MallocScribble fills freed memory with 0x55, catches use-after-free"
           export DYLD_LIBRARY_PATH="${{ github.workspace }}/casadi:$DYLD_LIBRARY_PATH"
 
+          # Find .casadi file and strip extension (eval_dump adds .casadi itself)
           DUMP_FILE=$(ls -t *.casadi 2>/dev/null | head -1)
-          if [ -z "$DUMP_FILE" ]; then
-            DUMP_FILE=$(find . -name "*.casadi" -type f 2>/dev/null | head -1)
-          fi
-
           if [ -n "$DUMP_FILE" ]; then
-            echo "Found dump file: $DUMP_FILE"
+            DUMP_BASE="${DUMP_FILE%.casadi}"
+            echo "Found dump file: $DUMP_FILE, passing base name: $DUMP_BASE"
             MallocScribble=1 MallocGuardEdges=1 MallocErrorAbort=1 \
-              "${{ github.workspace }}/casadi/casadi-cli" eval_dump "$DUMP_FILE" 2>&1 || echo "MallocScribble run exited with code $?"
+              "${{ github.workspace }}/casadi/casadi-cli" eval_dump "$DUMP_BASE" 2>&1 || echo "MallocScribble run exited with code $?"
           else
             echo "No dump file found"
           fi
@@ -96,14 +92,12 @@ jobs:
           echo "=== Running casadi-cli eval_dump with leaks detection ==="
           export DYLD_LIBRARY_PATH="${{ github.workspace }}/casadi:$DYLD_LIBRARY_PATH"
 
+          # Find .casadi file and strip extension (eval_dump adds .casadi itself)
           DUMP_FILE=$(ls -t *.casadi 2>/dev/null | head -1)
-          if [ -z "$DUMP_FILE" ]; then
-            DUMP_FILE=$(find . -name "*.casadi" -type f 2>/dev/null | head -1)
-          fi
-
           if [ -n "$DUMP_FILE" ]; then
-            echo "Found dump file: $DUMP_FILE"
-            leaks --atExit -- "${{ github.workspace }}/casadi/casadi-cli" eval_dump "$DUMP_FILE" 2>&1 || echo "leaks run exited with code $?"
+            DUMP_BASE="${DUMP_FILE%.casadi}"
+            echo "Found dump file: $DUMP_FILE, passing base name: $DUMP_BASE"
+            leaks --atExit -- "${{ github.workspace }}/casadi/casadi-cli" eval_dump "$DUMP_BASE" 2>&1 || echo "leaks run exited with code $?"
           else
             echo "No dump file found"
           fi
