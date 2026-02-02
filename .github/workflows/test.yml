@@ -10,27 +10,18 @@ jobs:
     steps:
       - uses: actions/checkout@v4.1.1
 
-      - name: Download CasADi nightly (Intel)
-        run: |
-          wget https://github.com/casadi/casadi/releases/download/nightly-relwithdebinfo-debug/casadi-relwithdebinfo-debug-osx-x86_64-py312.tar.gz -O casadi.tar.gz
-
-      - name: Unpack CasADi
-        run: |
-          mkdir -p casadi_py
-          tar xzf casadi.tar.gz -C casadi_py
-
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.12'
 
-      - name: Install numpy
-        run: pip install numpy
+      - name: Install CasADi and numpy
+        run: |
+          pip install numpy
+          pip install https://github.com/casadi/casadi/releases/download/nightly-relwithdebinfo-debug/casadi-3.7.2.dev+relwithdebinfo.debug-cp312-none-macosx_11_0_x86_64.macosx_11_0_intel.whl
 
       - name: Run DAQP bug test
-        run: |
-          export PYTHONPATH="${{ github.workspace }}/casadi_py:$PYTHONPATH"
-          python test_daqp_bug.py
+        run: python test_daqp_bug.py
 
   test-matlab-macos-arm64:
     runs-on: macos-14
