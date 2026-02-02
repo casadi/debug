@@ -15,10 +15,10 @@ jobs:
       - name: Clone CasADi repo
         run: git clone --depth 1 https://github.com/casadi/casadi.git casadi_src
 
-      # Download CasADi from main branch
-      - name: Download CasADi nightly (main branch)
+      # Download CasADi from debug branch (has dSYM files for symbolication)
+      - name: Download CasADi nightly (debug branch with dSYMs)
         run: |
-          wget https://github.com/casadi/casadi/releases/download/nightly-main/casadi-main-osx-arm64-matlab2018b.zip -O casadi.zip
+          wget https://github.com/casadi/casadi/releases/download/nightly-relwithdebinfo-debug/casadi-relwithdebinfo-debug-osx-arm64-matlab2018b.zip -O casadi.zip
 
       - name: Unpack CasADi
         run: unzip casadi.zip -d casadi
