@@ -121,9 +121,15 @@ jobs:
                   print(f"[{frame_num:>3}] {func_name} (system library)")
                   continue
 
-              # Find dSYM
+              # Find dSYM - try versioned name first, then unversioned
               lib_name = Path(lib_path).name
               dsym_path = casadi_dir / f"{lib_name}.dSYM" / "Contents" / "Resources" / "DWARF" / lib_name
+
+              if not dsym_path.exists():
+                  # Try stripping version number: libfoo.2.dylib -> libfoo.dylib
+                  unversioned = re.sub(r'\.\d+\.dylib$', '.dylib', lib_name)
+                  if unversioned != lib_name:
+                      dsym_path = casadi_dir / f"{unversioned}.dSYM" / "Contents" / "Resources" / "DWARF" / unversioned
 
               if not dsym_path.exists():
                   print(f"[{frame_num:>3}] {func_name} (no dSYM for {lib_name})")
