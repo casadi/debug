@@ -1,4 +1,4 @@
-name: Test CasADi with ASAN
+name: Test CasADi
 
 on:
   push:
@@ -15,64 +15,25 @@ jobs:
       - name: Clone CasADi repo
         run: git clone --depth 1 https://github.com/casadi/casadi.git casadi_src
 
-      # Stage 1: Use CasADi from main branch to generate dumps
-      - name: Download CasADi nightly (main branch)
+      - name: Download CasADi nightly
         run: |
-          wget https://github.com/casadi/casadi/releases/download/nightly-main/casadi-main-osx-arm64-matlab2018b.zip -O casadi_main.zip
+          wget https://github.com/casadi/casadi/releases/download/nightly-relwithdebinfo-debug/casadi-relwithdebinfo-debug-osx-arm64-matlab2018b.zip -O casadi.zip
 
-      - name: Unpack main branch CasADi
-        run: unzip casadi_main.zip -d casadi_main
+      - name: Unpack
+        run: unzip casadi.zip -d casadi
 
       - name: Set up MATLAB
         uses: matlab-actions/setup-matlab@v2
         with:
           release: R2025a
 
-      - name: Run sysid_gauss_newton_patched with dump enabled (main branch CasADi)
+      - name: Run sysid_patched with AMD ordering (workaround for METIS bug)
         uses: matlab-actions/run-command@v2
         continue-on-error: true
         env:
           MW_CRASH_MODE: native
         with:
-          command: addpath('${{ github.workspace }}/casadi_main'); addpath('${{ github.workspace }}'); sysid_patched
-
-      - name: List dump files
-        if: always()
-        run: |
-          echo "=== Looking for dump files ==="
-          find . -name "*.casadi" -o -name "solver.in*" 2>/dev/null | head -20
-          ls -la *.casadi 2>/dev/null || echo "No .casadi files in current dir"
-          ls -la solver.in* 2>/dev/null || echo "No solver.in files in current dir"
-
-      # Stage 2: Use ASAN-enabled CasADi from debug branch to analyze dumps
-      - name: Download CasADi nightly (ASAN-enabled, debug branch)
-        if: always()
-        run: |
-          wget https://github.com/casadi/casadi/releases/download/nightly-relwithdebinfo-debug/casadi-relwithdebinfo-debug-osx-arm64-matlab2018b.zip -O casadi_asan.zip
-
-      - name: Unpack ASAN CasADi
-        if: always()
-        run: unzip casadi_asan.zip -d casadi_asan
-
-      - name: Run casadi-cli eval_dump with ASAN
-        if: always()
-        run: |
-          echo "=== Running casadi-cli eval_dump with ASAN ==="
-          export DYLD_LIBRARY_PATH="${{ github.workspace }}/casadi_asan:$DYLD_LIBRARY_PATH"
-
-          # Find the dump file
-          DUMP_FILE=$(ls -t *.casadi 2>/dev/null | head -1)
-          if [ -z "$DUMP_FILE" ]; then
-            echo "No .casadi dump file found, looking in other locations..."
-            DUMP_FILE=$(find . -name "*.casadi" -type f 2>/dev/null | head -1)
-          fi
-
-          if [ -n "$DUMP_FILE" ]; then
-            echo "Found dump file: $DUMP_FILE"
-            "${{ github.workspace }}/casadi_asan/casadi-cli" eval_dump "$DUMP_FILE" || echo "casadi-cli exited with code $?"
-          else
-            echo "No dump file found to analyze"
-          fi
+          command: addpath('${{ github.workspace }}/casadi'); addpath('${{ github.workspace }}'); sysid_patched
 
       - name: Wait for crash report generation
         if: always()
@@ -144,7 +105,7 @@ jobs:
           # [ 12] 0x000000012b17d4d0 /path/to/lib.dylib+00201936 __func+00000108
           pattern = r'\[\s*(\d+)\]\s+(0x[0-9a-fA-F]+)\s+(/[^\s]+\.dylib)\+(\d+)\s+(\S+)'
 
-          casadi_dir = Path("${{ github.workspace }}/casadi_main")
+          casadi_dir = Path("${{ github.workspace }}/casadi")
 
           print("=== Symbolicated Stack Trace ===\n")
 
