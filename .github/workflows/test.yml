@@ -18,10 +18,92 @@ jobs:
       - name: Install CasADi and numpy
         run: |
           pip install numpy
-          pip install https://github.com/casadi/casadi/releases/download/nightly-main/casadi-3.7.2.dev+main-cp312-none-macosx_11_0_x86_64.macosx_11_0_intel.whl
+          pip install https://github.com/casadi/casadi/releases/download/nightly-relwithdebinfo-debug/casadi-3.7.2.dev+relwithdebinfo.debug-cp312-none-macosx_11_0_x86_64.macosx_11_0_intel.whl
 
-      - name: Run DAQP bug test
-        run: python test_daqp_bug.py
+      # Baseline: Run Python test without memory debugging
+      - name: Run DAQP bug test (baseline - no debugging)
+        continue-on-error: true
+        run: |
+          echo "=== Running Python test (baseline) ==="
+          echo "This establishes whether the bug reproduces"
+          python test_daqp_bug.py 2>&1 || echo "Baseline run exited with code $?"
+
+      # Memory debugging approach 1: Guard Malloc
+      - name: Run Python test with Guard Malloc
+        if: always()
+        continue-on-error: true
+        run: |
+          echo "=== Running Python test with Guard Malloc ==="
+          echo "Guard Malloc puts guard pages around allocations to catch buffer overruns"
+          DYLD_INSERT_LIBRARIES=/usr/lib/libgmalloc.dylib \
+            python test_daqp_bug.py 2>&1 || echo "Guard Malloc run exited with code $?"
+
+      # Memory debugging approach 2: MallocScribble + MallocGuardEdges
+      - name: Run Python test with MallocScribble
+        if: always()
+        continue-on-error: true
+        run: |
+          echo "=== Running Python test with MallocScribble ==="
+          echo "MallocScribble fills freed memory with 0x55, catches use-after-free"
+          MallocScribble=1 MallocGuardEdges=1 MallocErrorAbort=1 \
+            python test_daqp_bug.py 2>&1 || echo "MallocScribble run exited with code $?"
+
+      # Memory debugging approach 3: Instruments/xctrace
+      - name: Run Python test with Instruments (Allocations)
+        if: always()
+        continue-on-error: true
+        run: |
+          echo "=== Running Python test with Instruments Allocations template ==="
+          xcrun xctrace record \
+            --template "Allocations" \
+            --output allocations.trace \
+            --launch -- python test_daqp_bug.py 2>&1 || echo "xctrace exited with code $?"
+
+          echo "=== Trace file created ==="
+          ls -la *.trace 2>/dev/null || echo "No trace files"
+
+      # Memory debugging approach 4: leaks tool
+      - name: Run Python test with leaks detection
+        if: always()
+        continue-on-error: true
+        run: |
+          echo "=== Running Python test with leaks detection ==="
+          leaks --atExit -- python test_daqp_bug.py 2>&1 || echo "leaks run exited with code $?"
+
+      - name: Wait for crash report generation
+        if: always()
+        run: |
+          echo "Waiting for macOS to generate crash report..."
+          sleep 15
+
+      - name: Collect crash info
+        if: always()
+        run: |
+          echo "=== Core dumps ==="
+          ls -la /cores/ 2>/dev/null || echo "No /cores directory or empty"
+          find /cores -name "core.*" 2>/dev/null | head -5 | while read f; do
+            echo "=== Core dump: $f ==="
+            ls -la "$f"
+          done
+
+          echo ""
+          echo "=== System crash reports - .ips files ==="
+          find /Library/Logs/DiagnosticReports ~/Library/Logs/DiagnosticReports -name "*.ips" -mmin -30 2>/dev/null | while read f; do
+            echo "=== $f ==="
+            cat "$f" 2>/dev/null
+          done
+
+          echo ""
+          echo "=== System crash reports - .crash files ==="
+          find /Library/Logs/DiagnosticReports ~/Library/Logs/DiagnosticReports -name "*.crash" -mmin -30 2>/dev/null | while read f; do
+            echo "=== $f ==="
+            cat "$f" 2>/dev/null
+          done
+
+          echo ""
+          echo "=== List all diagnostic reports ==="
+          ls -la /Library/Logs/DiagnosticReports/ 2>/dev/null | tail -30
+          ls -la ~/Library/Logs/DiagnosticReports/ 2>/dev/null | tail -30
 
   test-matlab-macos-arm64:
     runs-on: macos-14
