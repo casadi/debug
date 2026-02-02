@@ -44,6 +44,25 @@ jobs:
           ls -la *.casadi 2>/dev/null || echo "No .casadi files in current dir"
           ls -la solver.in* 2>/dev/null || echo "No solver.in files in current dir"
 
+      # Baseline: Run casadi-cli pure to verify crash reproduces
+      - name: Run casadi-cli eval_dump (baseline - no debugging)
+        if: always()
+        continue-on-error: true
+        run: |
+          echo "=== Running casadi-cli eval_dump (baseline) ==="
+          echo "This establishes whether the bug reproduces outside MATLAB"
+          export DYLD_LIBRARY_PATH="${{ github.workspace }}/casadi:$DYLD_LIBRARY_PATH"
+
+          # Find .casadi file and strip extension (eval_dump adds .casadi itself)
+          DUMP_FILE=$(ls -t *.casadi 2>/dev/null | head -1)
+          if [ -n "$DUMP_FILE" ]; then
+            DUMP_BASE="${DUMP_FILE%.casadi}"
+            echo "Found dump file: $DUMP_FILE, passing base name: $DUMP_BASE"
+            "${{ github.workspace }}/casadi/casadi-cli" eval_dump "$DUMP_BASE" 2>&1 || echo "Baseline run exited with code $?"
+          else
+            echo "No dump file found"
+          fi
+
       # Memory debugging approach 1: Guard Malloc
       - name: Run casadi-cli with Guard Malloc
         if: always()
