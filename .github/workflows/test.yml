@@ -18,7 +18,7 @@ jobs:
       - name: Install CasADi and numpy
         run: |
           pip install numpy
-          pip install https://github.com/casadi/casadi/releases/download/nightly-relwithdebinfo-debug/casadi-3.7.2.dev+relwithdebinfo.debug-cp312-none-macosx_11_0_x86_64.macosx_11_0_intel.whl
+          pip install https://github.com/casadi/casadi/releases/download/nightly-main/casadi-3.7.2.dev+main-cp312-none-macosx_11_0_x86_64.macosx_11_0_intel.whl
 
       - name: Run DAQP bug test
         run: python test_daqp_bug.py
