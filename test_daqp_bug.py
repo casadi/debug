@@ -20,7 +20,7 @@ blower = -20 * rng.random((m, 1))
 
 solver = ca.conic('solver', 'daqp',
                   {'h': ca.DM(H).sparsity(), "a": ca.DM(A).sparsity()},
-                #   {'discrete': [1] * ms + [0] * (n-ms)}
+                 {'discrete': [1] * ms + [0] * (n-ms)}
                   )
 
 daqp_sol = solver(h=H, g=f, a=A, lbx=[0] * ms + [-10] * (n-ms), ubx=[1] * ms + [10] * (n-ms), lba=blower, uba=bupper)
