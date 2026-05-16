@@ -64,7 +64,7 @@ jobs:
           pip install numpy scipy pandas looseversion
           pip install pyright                            # ← CI installs this; previously skipped
 
-      - name: Run from test/python like CI does
+      - name: Run from test/python like CI does (alltests.py)
         continue-on-error: true
         shell: bash -el {0}
         env:
@@ -75,8 +75,11 @@ jobs:
           which python
           python -V
           cd test/python
-          python -c 'from casadi import *; print("OK", __version__)' 2>&1 | tail -20
-          echo "exit=$?"
+          # First: just the import probe
+          python -c 'import casadi; print("simple-import OK", casadi.__version__)' 2>&1 | tail -10 || true
+          # Then: full alltests.py to match CI EXACTLY
+          timeout 60 python alltests.py 2>&1 | head -30
+          echo "alltests exit=$?"
 
       - name: LD_DEBUG=libs,files dump
         continue-on-error: true
