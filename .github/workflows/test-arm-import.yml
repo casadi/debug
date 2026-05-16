@@ -92,7 +92,12 @@ jobs:
       - name: pip install deps (matches CI)
         shell: bash -el {0}
         run: |
-          pip install numpy scipy pandas looseversion
+          # Install via conda so site-packages writability is not an issue
+          conda install -y -n py3.11 numpy scipy pandas
+          # looseversion is conda-forge only on some platforms; use pip into conda's env
+          $CONDA/envs/py3.11/bin/pip install looseversion
+          which python
+          python -c "import numpy; print('numpy in conda env:', numpy.__version__)"
 
       - name: Try `import casadi` under conda py3.11 (mimics failing CI step)
         continue-on-error: true
