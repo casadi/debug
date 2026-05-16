@@ -75,7 +75,7 @@ jobs:
           auto-update-conda: true
           channels: pkgs/main, conda-forge, conda-forge/label/python_rc
 
-      - name: Install deps (mirror CI: pip + numpy scipy pandas looseversion pyright)
+      - name: "Install deps (mirror CI: pip + numpy scipy pandas looseversion pyright)"
         shell: bash -el {0}
         run: |
           conda install -y pip
