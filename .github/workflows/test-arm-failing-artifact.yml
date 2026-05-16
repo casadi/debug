@@ -35,7 +35,7 @@ jobs:
           ls -la
           ls -la *.zip || true
 
-      - name: Unpack (mirrors CI: unzip ...-py311.zip -d casadi)
+      - name: "Unpack (mirrors CI - unzip py311.zip -d casadi)"
         run: |
           unzip -q casadi-linux-aarch64-py311.zip -d casadi
           ls casadi/casadi/ | head -10
