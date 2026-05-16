@@ -13,13 +13,19 @@ jobs:
   diag:
     runs-on: ubuntu-24.04-arm
     steps:
-      - uses: actions/checkout@v4.1.1
+      # Replicate CI exactly: checkout casadi/casadi as the workspace root, unzip
+      # the artifact into ./casadi (mirroring binaries.yml line 1100), and run
+      # `cd test/python && python -c "from casadi import *"`.
+      - name: Checkout casadi/casadi (abi3)
+        uses: actions/checkout@v6.0.2
+        with:
+          repository: casadi/casadi
+          ref: abi3
 
       - name: Download FAILING CI artifact from casadi/casadi
         uses: actions/download-artifact@v8.0.1
         with:
           name: casadi-linux-aarch64-py311
-          # Replace with the run-id of the latest failing test-python (ubuntu-arm) push:
           run-id: 25957641744
           github-token: ${{ secrets.GITHUB_TOKEN }}
           repository: casadi/casadi
@@ -29,15 +35,14 @@ jobs:
           ls -la
           ls -la *.zip || true
 
-      - name: Unpack
+      - name: Unpack (mirrors CI: unzip ...-py311.zip -d casadi)
         run: |
-          mkdir -p ws
-          unzip -q casadi-linux-aarch64-py311.zip -d ws/casadi
-          ls ws/casadi/casadi/ | head -10
+          unzip -q casadi-linux-aarch64-py311.zip -d casadi
+          ls casadi/casadi/ | head -10
 
       - name: Inspect _casadi.so
         run: |
-          F=ws/casadi/casadi/_casadi.so
+          F=casadi/casadi/_casadi.so
           file $F
           md5sum $F
           readelf -d $F | grep -E "NEEDED|RPATH|RUNPATH"
@@ -59,33 +64,25 @@ jobs:
           pip install numpy scipy pandas looseversion
           pip install pyright                            # ← CI installs this; previously skipped
 
-      - name: Try `import casadi` BEFORE pip install pyright (control)
+      - name: Run from test/python like CI does
         continue-on-error: true
         shell: bash -el {0}
         env:
-          PYTHONPATH: ${{ github.workspace }}/ws/casadi
-        run: |
-          python -c 'import casadi; print("after pyright OK", casadi.__version__)' 2>&1 | tail -5
-
-      - name: Try `import casadi` (FAILING artifact under CI-style conda env)
-        continue-on-error: true
-        shell: bash -el {0}
-        env:
-          PYTHONPATH: ${{ github.workspace }}/ws/casadi
+          PYTHONPATH: ${{ github.workspace }}/casadi
         run: |
           set -x
           ls "$PYTHONPATH/casadi/_casadi.so"
-          file "$PYTHONPATH/casadi/_casadi.so"
-          ldd "$PYTHONPATH/casadi/_casadi.so" 2>&1 | head -15
           which python
           python -V
-          python -c 'import casadi; print("OK", casadi.__version__)' 2>&1 | tail -20
+          cd test/python
+          python -c 'from casadi import *; print("OK", __version__)' 2>&1 | tail -20
           echo "exit=$?"
 
       - name: LD_DEBUG=libs,files dump
         continue-on-error: true
         shell: bash -el {0}
         env:
-          PYTHONPATH: ${{ github.workspace }}/ws/casadi
+          PYTHONPATH: ${{ github.workspace }}/casadi
         run: |
-          LD_DEBUG=libs,files python -c 'import casadi' 2>&1 | tail -80 || true
+          cd test/python
+          LD_DEBUG=libs,files python -c 'from casadi import *' 2>&1 | tail -80 || true
