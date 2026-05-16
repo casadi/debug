@@ -52,11 +52,20 @@ jobs:
           auto-update-conda: true
           channels: pkgs/main, conda-forge, conda-forge/label/python_rc
 
-      - name: conda install pip + numpy etc
+      - name: conda install pip + numpy etc (EXACTLY mirror CI)
         shell: bash -el {0}
         run: |
-          conda install -y -n py3.11 pip
+          conda install -y pip                          # CI does this (no -n)
           pip install numpy scipy pandas looseversion
+          pip install pyright                            # ← CI installs this; previously skipped
+
+      - name: Try `import casadi` BEFORE pip install pyright (control)
+        continue-on-error: true
+        shell: bash -el {0}
+        env:
+          PYTHONPATH: ${{ github.workspace }}/ws/casadi
+        run: |
+          python -c 'import casadi; print("after pyright OK", casadi.__version__)' 2>&1 | tail -5
 
       - name: Try `import casadi` (FAILING artifact under CI-style conda env)
         continue-on-error: true
