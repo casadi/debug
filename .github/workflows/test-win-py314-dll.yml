@@ -1,0 +1,121 @@
+name: Diagnose windows py3.14 _casadi.pyd DLL load failure
+
+# casadi/casadi CI's test-python (314, windows-2022, 64) fails with
+#   ImportError: DLL load failed while importing _casadi: The specified module could not be found.
+# while py3.7-3.11 on the same runner all succeed. The wheel is cp311-abi3
+# so py3.14 should be able to load it. Question: which Windows DLL is the
+# loader unable to find when running under py3.14, and is it specific to
+# conda's py3.14 stdlib not shipping something that py3.11 ships?
+
+on: [push, workflow_dispatch]
+
+jobs:
+  diag:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4.1.1
+
+      - name: Download cp311-abi3 win_amd64 wheel
+        shell: bash
+        run: |
+          curl -sL -o casadi.whl \
+            https://github.com/casadi/casadi/releases/download/nightly-abi3/casadi-3.7.2.dev+abi3-cp311-abi3-win_amd64.whl
+          ls -la casadi.whl
+
+      - name: Unpack wheel
+        shell: bash
+        run: |
+          mkdir -p ws
+          unzip -q casadi.whl -d ws/casadi
+          ls ws/casadi/casadi/ | head -20
+
+      - name: Set up conda py3.14 (matches CI)
+        uses: conda-incubator/setup-miniconda@77236efeba76d591229f44c36f2469426cc33dec
+        with:
+          python-version: 3.14
+          activate-environment: py3.14
+          auto-update-conda: true
+          channels: pkgs/main, conda-forge, conda-forge/label/python_rc
+
+      - name: Check Python env
+        shell: pwsh
+        run: |
+          conda activate py3.14
+          where python
+          python --version
+          python -c "import sys; print('exec:', sys.executable); print('prefix:', sys.prefix)"
+          dir $env:CONDA_PREFIX\python3.dll
+          dir $env:CONDA_PREFIX\python314*.dll
+          dir $env:CONDA_PREFIX\vcruntime*.dll
+          dir $env:CONDA_PREFIX\*.dll | findstr "python"
+
+      - name: Try `import casadi` (expected to fail like CI)
+        continue-on-error: true
+        shell: pwsh
+        env:
+          PYTHONPATH: ${{ github.workspace }}\ws\casadi
+        run: |
+          conda activate py3.14
+          python -c "import casadi; print('OK', casadi.__version__)"
+
+      - name: Diagnose missing DLL with dumpbin
+        continue-on-error: true
+        shell: pwsh
+        env:
+          PYTHONPATH: ${{ github.workspace }}\ws\casadi
+        run: |
+          $pyd = "$env:GITHUB_WORKSPACE\ws\casadi\casadi\_casadi.pyd"
+          dir $pyd
+          # find dumpbin
+          $dumpbin = (Get-ChildItem -Path "C:\Program Files*\Microsoft Visual Studio\2022\*\VC\Tools\MSVC\*\bin\Hostx64\x64\dumpbin.exe" -ErrorAction SilentlyContinue | Select-Object -First 1).FullName
+          if (-not $dumpbin) {
+            $dumpbin = (Get-Command dumpbin.exe -ErrorAction SilentlyContinue).Source
+          }
+          Write-Host "dumpbin path: $dumpbin"
+          & $dumpbin /dependents $pyd
+
+      - name: Try to load each DLL individually with ctypes (find the missing one)
+        continue-on-error: true
+        shell: pwsh
+        env:
+          PYTHONPATH: ${{ github.workspace }}\ws\casadi
+        run: |
+          conda activate py3.14
+          python -c @"
+          import ctypes, os
+          casadi_dir = r'${{ github.workspace }}\ws\casadi\casadi'
+          os.add_dll_directory(casadi_dir)
+          # Walk DLLs in casadi_dir and try to load each, recording success/failure
+          for f in sorted(os.listdir(casadi_dir)):
+              if f.lower().endswith(('.dll','.pyd')):
+                  full = os.path.join(casadi_dir, f)
+                  try:
+                      ctypes.CDLL(full)
+                      print('OK   ', f)
+                  except OSError as e:
+                      print('FAIL ', f, '|', str(e)[:120])
+          "@
+
+      - name: Compare with py3.11 (works) — DLL deps
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          # Create py3.11 conda env quickly
+          conda create -y -n py3.11 -c conda-forge python=3.11 2>&1 | Select-String -Pattern "done|Successfully" | Select-Object -First 5
+          conda activate py3.11
+          where python
+          python --version
+          dir $env:CONDA_PREFIX\python3.dll
+          dir $env:CONDA_PREFIX\python311*.dll
+          # Show what 3.11 ships that 3.14 might not
+          (Get-ChildItem $env:CONDA_PREFIX\*.dll).Name | Sort-Object | Select-Object -First 30
+
+      - name: Try `import casadi` under py3.11 (control)
+        continue-on-error: true
+        shell: pwsh
+        env:
+          PYTHONPATH: ${{ github.workspace }}\ws\casadi
+        run: |
+          conda activate py3.11
+          pip install numpy
+          python -c "import casadi; print('OK py3.11', casadi.__version__)"
