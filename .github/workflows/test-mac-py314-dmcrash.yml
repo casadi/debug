@@ -168,3 +168,89 @@ jobs:
               print('caught:', type(e).__name__, str(e)[:200])
           print('mallocscribble clear')
           " 2>&1 | tail -40
+
+      # ===== CONTROL: same wheel + py3.11 (to isolate py3.14-specific bug) =====
+      - name: Set up conda py3.11 (control)
+        uses: conda-incubator/setup-miniconda@77236efeba76d591229f44c36f2469426cc33dec
+        with:
+          python-version: "3.11"
+          activate-environment: py3.11
+          auto-update-conda: true
+          channels: pkgs/main, conda-forge
+
+      - name: "Install deps in py3.11 (pip + numpy)"
+        shell: bash -el {0}
+        run: |
+          conda activate py3.11
+          conda install -y pip
+          pip install numpy
+
+      - name: Reproduce test_DMcrash under py3.11 (control) — same wheel
+        continue-on-error: true
+        shell: bash -el {0}
+        env:
+          PYTHONPATH: ${{ github.workspace }}/artifact
+        run: |
+          conda activate py3.11
+          which python && python -V
+          set -x
+          python -X faulthandler -c "
+          from casadi import DM
+          try:
+              DM([DM([1,2]), DM([1,2])])
+          except Exception as e:
+              print('py3.11 caught:', type(e).__name__, str(e)[:200])
+          a = DM([DM([1]), DM([2])])
+          print('py3.11 all clear, a =', a)
+          " 2>&1 | tail -40
+          echo "py3.11 exit=$?"
+
+      # ===== lldb attach for C-frame capture (py3.14 again) =====
+      - name: Capture crash with lldb on py3.14
+        continue-on-error: true
+        shell: bash -el {0}
+        env:
+          PYTHONPATH: ${{ github.workspace }}/artifact
+        run: |
+          conda activate py3.14
+          which python && python -V
+          # Generate a tiny script first (lldb is happier with file input)
+          cat > /tmp/crashprobe.py <<'PYEOF'
+          import sys
+          print('about to call DM([DM([1,2]), DM([1,2])])', flush=True)
+          from casadi import DM
+          DM([DM([1,2]), DM([1,2])])
+          print('unreachable: did not crash', flush=True)
+          PYEOF
+          # Run under lldb, dump backtrace on SIGSEGV
+          lldb -o "settings set target.process.stop-on-exec false" \
+               -o "run /tmp/crashprobe.py" \
+               -o "thread backtrace all" \
+               -o "register read" \
+               -o "image lookup --address \$pc" \
+               -o "quit" \
+               -- $(which python) 2>&1 | tail -120 || true
+
+      # ===== Refcount instrumentation: print sys.getrefcount before/around the crash =====
+      - name: Refcount probe (does PyTuple_SET_ITEM in funpack steal a borrowed ref?)
+        continue-on-error: true
+        shell: bash -el {0}
+        env:
+          PYTHONPATH: ${{ github.workspace }}/artifact
+        run: |
+          conda activate py3.14
+          set -x
+          python -X faulthandler -c "
+          import sys
+          from casadi import DM
+          a = DM([1,2])
+          b = DM([1,2])
+          arg_list = [a, b]
+          print('before call: refcount(a)=', sys.getrefcount(a), 'refcount(arg_list)=', sys.getrefcount(arg_list), flush=True)
+          try:
+              DM(arg_list)
+          except Exception as e:
+              print('caught:', type(e).__name__, str(e)[:200], flush=True)
+          print('after call: refcount(a)=', sys.getrefcount(a), 'refcount(arg_list)=', sys.getrefcount(arg_list), flush=True)
+          " 2>&1 | tail -40
+          echo "refcount-probe exit=$?"
