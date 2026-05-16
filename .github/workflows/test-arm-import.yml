@@ -1,0 +1,135 @@
+name: Diagnose ubuntu-24.04-arm casadi _casadi.so import failure
+
+on:
+  push:
+  workflow_dispatch:
+
+# Background:
+#   casadi/casadi CI's test-python (ubuntu-24.04-arm, 311) fails with
+#     ImportError: .../_casadi.so: cannot open shared object file: No such file or directory
+#   The file IS present after unzip — Linux's dlerror text is misleading.
+#   This job downloads the same wheel/zip the CI consumes, runs every
+#   diagnostic that would distinguish (a) missing transitive NEEDED,
+#   (b) page-size mismatch, (c) AppArmor / mount option, (d) ELF feature
+#   the runner doesn't support, (e) glibc/libstdc++ ABI hiccup.
+
+jobs:
+  diag:
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v4.1.1
+
+      - name: Runner baseline
+        run: |
+          set -x
+          uname -a
+          getconf PAGE_SIZE
+          lscpu | head -25 || true
+          cat /etc/os-release | head -3
+          mount | grep -E "/home|noexec|nosuid" || true
+          ldconfig -p | grep -E "libstdc\+\+|libgfortran|libgcc_s|libc\.so" | head -10
+          ls /lib/aarch64-linux-gnu/ | head -20
+
+      - name: Download CasADi cp311-abi3 manylinux2014 aarch64 wheel
+        run: |
+          wget -q https://github.com/casadi/casadi/releases/download/nightly-abi3/casadi-3.7.2.dev+abi3-cp311-abi3-manylinux2014_aarch64.whl -O casadi.whl
+          ls -la casadi.whl
+
+      - name: Unpack wheel as zip into casadi/ to mimic CI layout
+        run: |
+          mkdir -p unpacked
+          unzip -q casadi.whl -d unpacked
+          # Wheel layout puts casadi/ at top. Mirror CI's `unzip -d casadi`
+          mkdir -p ws/casadi
+          cp -r unpacked/casadi ws/casadi/
+          echo "=== Tree ==="
+          ls -la ws/casadi/casadi/_casadi.so ws/casadi/casadi/__init__.py ws/casadi/casadi/casadi.py ws/casadi/casadi/libcasadi.so.3.7
+
+      - name: Inspect _casadi.so
+        run: |
+          set -x
+          cd ws/casadi/casadi
+          file _casadi.so
+          stat _casadi.so
+          ls -la _casadi.so libcasadi.so.3.7
+          readelf -d _casadi.so | head -25
+          readelf -lW _casadi.so | head -30
+          readelf -hW _casadi.so | head -20
+          # Symbol versions required
+          readelf -V _casadi.so | grep -oE "GLIBC_[0-9.]+|GLIBCXX_[0-9.]+" | sort -V -u | tail -10
+          ldd _casadi.so 2>&1 | head -25
+
+      - name: Try ctypes.CDLL (no Python conda)
+        continue-on-error: true
+        run: |
+          cd ws/casadi/casadi
+          python3 -V
+          python3 -c 'import ctypes; ctypes.CDLL("./_casadi.so"); print("OK system python")' 2>&1 | tail -5 || echo "exit=$?"
+
+      - name: Try ctypes.CDLL with LD_DEBUG=files
+        continue-on-error: true
+        run: |
+          cd ws/casadi/casadi
+          LD_DEBUG=files python3 -c 'import ctypes; ctypes.CDLL("./_casadi.so")' 2>&1 | tail -50 || true
+
+      - name: Set up conda python 3.11 (matches CI test-python setup)
+        uses: conda-incubator/setup-miniconda@77236efeba76d591229f44c36f2469426cc33dec
+        with:
+          python-version: 3.11
+          activate-environment: py3.11
+          auto-update-conda: true
+          channels: pkgs/main, conda-forge, conda-forge/label/python_rc
+
+      - name: Conda env baseline
+        shell: bash -el {0}
+        run: |
+          which python
+          python -V
+          ls $CONDA_PREFIX/lib/libstdc++.so* || true
+          ls $CONDA_PREFIX/lib/libgcc_s.so* || true
+          conda list | head -30
+
+      - name: pip install deps (matches CI)
+        shell: bash -el {0}
+        run: |
+          pip install numpy scipy pandas looseversion
+
+      - name: Try `import casadi` under conda py3.11 (mimics failing CI step)
+        continue-on-error: true
+        shell: bash -el {0}
+        env:
+          PYTHONPATH: ${{ github.workspace }}/ws/casadi
+        run: |
+          set -x
+          ls "$PYTHONPATH/casadi/_casadi.so"
+          file "$PYTHONPATH/casadi/_casadi.so"
+          ldd "$PYTHONPATH/casadi/_casadi.so" 2>&1 | head -15
+          python -c 'import casadi; print("OK", casadi.__version__)' 2>&1 | tail -20
+          echo "exit=$?"
+
+      - name: Try `import casadi` with LD_DEBUG=libs,files
+        continue-on-error: true
+        shell: bash -el {0}
+        env:
+          PYTHONPATH: ${{ github.workspace }}/ws/casadi
+        run: |
+          LD_DEBUG=libs,files python -c 'import casadi' 2>&1 | tail -120 || true
+
+      - name: Try `import casadi` with strace -e openat
+        continue-on-error: true
+        shell: bash -el {0}
+        env:
+          PYTHONPATH: ${{ github.workspace }}/ws/casadi
+        run: |
+          sudo apt-get install -y strace 2>&1 | tail -3
+          strace -f -e trace=openat,mmap,mprotect python -c 'import casadi' 2>&1 | tail -60 || true
+
+      - name: Also try plain system python (no conda)
+        continue-on-error: true
+        env:
+          PYTHONPATH: ${{ github.workspace }}/ws/casadi
+        run: |
+          set -x
+          /usr/bin/python3 -V
+          /usr/bin/python3 -m pip install --user numpy 2>&1 | tail -2 || true
+          /usr/bin/python3 -c 'import casadi; print("OK system", casadi.__version__)' 2>&1 | tail -10 || true
