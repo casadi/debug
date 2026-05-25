@@ -1,0 +1,166 @@
+name: Diagnose julia.exe sysimage bootstrap on real Windows
+
+# A from-source (USE_BINARYBUILDER=0) cross-build of Julia 1.12.6 in the
+# MXE dockcross image links libjulia.dll + libjulia-codegen.dll + julia.exe
+# successfully, but the sysimage bootstrap step requires running julia.exe
+# on the build host. Under wine inside the container, that exits silently
+# with rc=1 and no diagnostic output. This workflow runs the same step on
+# a real Windows runner so we can see what actually happens.
+
+on:
+  workflow_dispatch:
+    inputs:
+      julia_tarball_url:
+        description: 'URL of the patched Julia 1.12.6 source tarball'
+        required: true
+        default: 'https://github.com/casadi/debug/releases/download/julia-1.12.6-mxe-bootstrap/julia-1.12.6-mxe-patched.tar.gz'
+
+jobs:
+
+  build-linux:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Show disk before
+        run: df -h /
+
+      - name: Download patched Julia source tarball
+        run: |
+          curl -fsSL -o julia-src.tar.gz "${{ github.event.inputs.julia_tarball_url }}"
+          ls -lh julia-src.tar.gz
+          tar -xzf julia-src.tar.gz
+          ls julia-1.12.6/Make.user
+
+      - name: Build extended dockcross image (cmake 3.29 + shims)
+        run: |
+          docker build -t julia-winbuild:latest julia-build
+
+      - name: Run the cross-build inside the container (link target only)
+        run: |
+          docker run --rm \
+            -u "$(id -u):$(id -g)" \
+            -v "$PWD/julia-1.12.6:/work" \
+            -e HOME=/tmp \
+            -e WINEPREFIX=/tmp/wineprefix \
+            -e WINEPATH='Z:\work\usr\bin;Z:\usr\src\mxe\usr\x86_64-w64-mingw32.shared.posix\bin' \
+            -e CMAKE_TOOLCHAIN_FILE= \
+            -e PKG_CONFIG_PATH=/work/usr/lib/pkgconfig \
+            -e PKG_CONFIG_LIBDIR=/work/usr/lib/pkgconfig \
+            -w /work \
+            --entrypoint bash julia-winbuild:latest \
+            -c 'set -o pipefail
+                export PATH=/usr/src/mxe/usr/bin:/usr/local/bin:$PATH
+                unset CMAKE_TOOLCHAIN_FILE
+                mkdir -p /tmp/wineprefix usr/bin
+                for d in libgcc_s_seh-1 libstdc++-6 libwinpthread-1 libgfortran-5 libquadmath-0 libgomp-1 libssp-0 libatomic-1; do
+                    cp -f /usr/src/mxe/usr/x86_64-w64-mingw32.shared.posix/bin/$d.dll usr/bin/
+                done
+                # Stop *before* the sysimage step so the Windows job can drive it.
+                make -j 4 julia-src-release 2>&1 | tail -200
+                echo "=== usr/bin layout ===" && ls -la usr/bin
+                echo "=== usr/manifest ===" && ls usr/manifest'
+
+      - name: Tar Julia install tree
+        run: |
+          cd julia-1.12.6
+          # Ship the full usr tree plus Base.jl/sysimage scripts needed for the
+          # sysimage bootstrap, plus the buildroot-relative scripts.
+          tar -czf ../julia-winbuild-usr.tar.gz \
+              usr/ base/ stdlib/ sysimage.mk Makefile Make.user Make.inc VERSION \
+              src/Makefile contrib/windows
+          ls -lh ../julia-winbuild-usr.tar.gz
+
+      - name: Upload artifact for Windows job
+        uses: actions/upload-artifact@v4
+        with:
+          name: julia-winbuild-usr
+          path: julia-winbuild-usr.tar.gz
+          retention-days: 7
+
+      - name: Show disk after
+        if: always()
+        run: df -h /
+
+
+  run-windows:
+    needs: build-linux
+    runs-on: windows-2022
+    timeout-minutes: 30
+    steps:
+      - name: Download Linux build artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: julia-winbuild-usr
+
+      - name: Extract
+        shell: pwsh
+        run: |
+          mkdir julia-tree | Out-Null
+          tar -xzf julia-winbuild-usr.tar.gz -C julia-tree
+          Get-ChildItem julia-tree
+          Get-ChildItem julia-tree\usr\bin\julia.exe, julia-tree\usr\bin\libjulia*.dll
+
+      - name: julia.exe --version (the smoke test that fails silently in wine)
+        shell: pwsh
+        continue-on-error: true
+        run: |
+          $exe = "$PWD\julia-tree\usr\bin\julia.exe"
+          Write-Host "=== file info ==="
+          Get-Item $exe | Format-List
+          Write-Host "=== running --version ==="
+          & $exe --version
+          Write-Host "=== exit code: $LASTEXITCODE ==="
+
+      - name: julia.exe -e 'println(VERSION)' (no sysimage required for this)
+        shell: pwsh
+        continue-on-error: true
+        run: |
+          $exe = "$PWD\julia-tree\usr\bin\julia.exe"
+          & $exe -e "println(VERSION)"
+          Write-Host "=== exit code: $LASTEXITCODE ==="
+
+      - name: Enumerate DLL imports of julia.exe and libjulia*.dll
+        shell: pwsh
+        continue-on-error: true
+        run: |
+          $dumpbin = (Get-ChildItem "C:\Program Files*\Microsoft Visual Studio\2022\*\VC\Tools\MSVC\*\bin\Hostx64\x64\dumpbin.exe" -ErrorAction SilentlyContinue | Select-Object -First 1).FullName
+          if (-not $dumpbin) { $dumpbin = (Get-Command dumpbin.exe -ErrorAction SilentlyContinue).Source }
+          Write-Host "dumpbin: $dumpbin"
+          foreach ($f in @('julia.exe','libjulia.dll','libjulia-internal.dll','libjulia-codegen.dll')) {
+              $p = "$PWD\julia-tree\usr\bin\$f"
+              if (Test-Path $p) {
+                  Write-Host "=== /dependents $f ==="
+                  & $dumpbin /dependents $p
+              }
+          }
+
+      - name: Run the actual sysimage bootstrap command (basecompiler-o.a)
+        shell: bash
+        continue-on-error: true
+        run: |
+          set -x
+          cd julia-tree
+          PRIVATE_LIBDIR="usr/lib/julia"
+          mkdir -p "$PRIVATE_LIBDIR"
+          cd base
+          # Cargo-cult the same command the Makefile would invoke under wine
+          # see sysimage.mk base_builder recipe
+          "../usr/bin/julia.exe" -O1 \
+              -C "generic;sandybridge,-xsaveopt,clone_all;haswell,-rdrnd,base(1)" \
+              --output-o "..\\${PRIVATE_LIBDIR//\//\\}\\basecompiler-o.a.tmp" \
+              --startup-file=no --warn-overwrite=yes -g1 Base_compiler.jl \
+              --buildroot "..\\" --dataroot "..\\share\\julia\\" \
+              2>&1 | tee ../basecompiler.log
+          echo "=== exit code: $? ==="
+          echo "=== output tail ==="
+          tail -50 ../basecompiler.log
+
+      - name: Upload bootstrap log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bootstrap-log
+          path: julia-tree/basecompiler.log
+          if-no-files-found: ignore
