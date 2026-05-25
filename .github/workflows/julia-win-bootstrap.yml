@@ -106,7 +106,7 @@ jobs:
               -C "generic;sandybridge,-xsaveopt,clone_all;haswell,-rdrnd,base(1);x86-64-v4,-rdrnd,base(1)" \
               --output-o "..\\${PRIVATE_LIBDIR//\//\\}\\basecompiler-o.a.tmp" \
               --startup-file=no --warn-overwrite=yes -g1 Base_compiler.jl \
-              --buildroot "..\\usr\\" --dataroot "..\\usr\\share\\julia\\" \
+              --buildroot "..\\usr\\" --dataroot "..\\usr\\share\\" \
               2>&1 | tee ../basecompiler.log
           echo "=== exit code: $? ==="
           echo "=== output tail ==="
