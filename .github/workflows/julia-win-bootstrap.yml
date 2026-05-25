@@ -40,24 +40,33 @@ jobs:
           Get-ChildItem julia-tree
           Get-ChildItem julia-tree\usr\bin\julia.exe, julia-tree\usr\bin\libjulia*.dll
 
-      - name: julia.exe --version (the smoke test that fails silently in wine)
-        shell: pwsh
+      - name: julia.exe --version with stdout/stderr capture (silent in wine — does it print on real Windows?)
+        shell: cmd
         continue-on-error: true
         run: |
-          $exe = "$PWD\julia-tree\usr\bin\julia.exe"
-          Write-Host "=== file info ==="
-          Get-Item $exe | Format-List Name,Length,VersionInfo
-          Write-Host "=== running --version ==="
-          & $exe --version
-          Write-Host "=== exit code: $LASTEXITCODE ==="
+          set "EXE=%CD%\julia-tree\usr\bin\julia.exe"
+          echo === direct invoke ===
+          "%EXE%" --version
+          echo === exit %ERRORLEVEL%
+          echo === redirected to file ===
+          "%EXE%" --version > version.out 2> version.err
+          echo === out:
+          type version.out
+          echo === err:
+          type version.err
+          echo === exit %ERRORLEVEL%
 
       - name: julia.exe -e println(VERSION) (no sysimage needed for this)
-        shell: pwsh
+        shell: cmd
         continue-on-error: true
         run: |
-          $exe = "$PWD\julia-tree\usr\bin\julia.exe"
-          & $exe -e "println(VERSION)"
-          Write-Host "=== exit code: $LASTEXITCODE ==="
+          set "EXE=%CD%\julia-tree\usr\bin\julia.exe"
+          "%EXE%" -e "println(VERSION)" > eval.out 2> eval.err
+          echo === exit %ERRORLEVEL%
+          echo === out:
+          type eval.out
+          echo === err:
+          type eval.err
 
       - name: Enumerate DLL imports of julia.exe and libjulia*.dll
         shell: pwsh
@@ -90,12 +99,14 @@ jobs:
           cd julia-tree
           PRIVATE_LIBDIR="usr/lib/julia"
           mkdir -p "$PRIVATE_LIBDIR"
+          # share/julia lives at usr/share/julia in this tree (not at top level),
+          # so --dataroot needs to point inside usr/.
           cd base
           "../usr/bin/julia.exe" -O1 \
               -C "generic;sandybridge,-xsaveopt,clone_all;haswell,-rdrnd,base(1);x86-64-v4,-rdrnd,base(1)" \
               --output-o "..\\${PRIVATE_LIBDIR//\//\\}\\basecompiler-o.a.tmp" \
               --startup-file=no --warn-overwrite=yes -g1 Base_compiler.jl \
-              --buildroot "..\\" --dataroot "..\\share\\julia\\" \
+              --buildroot "..\\usr\\" --dataroot "..\\usr\\share\\julia\\" \
               2>&1 | tee ../basecompiler.log
           echo "=== exit code: $? ==="
           echo "=== output tail ==="
