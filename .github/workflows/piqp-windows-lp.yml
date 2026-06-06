@@ -56,15 +56,28 @@ jobs:
               except Exception as e:
                   print("  EXCEPTION:", repr(e))
 
-          run("LP sparse_ldlt",   {"piqp":{"kkt_solver":"sparse_ldlt","verbose":True}})
-          run("LP dense_cholesky",{"piqp":{"kkt_solver":"dense_cholesky","verbose":True}})
-          run("LP sparse default",{"piqp":{}})
+          run("LP test_linear sparse",   {"piqp":{"kkt_solver":"sparse_ldlt"}})
 
-          # QP control: does PIQP solve a QP on Windows?
-          Hq = DM([[2,0],[0,2]])
-          sq = ca.conic("sq","piqp",{'h':Hq.sparsity(),'a':A.sparsity()},
-                        {"piqp":{"verbose":False},"error_on_fail":False})
-          rq = sq(h=Hq,g=G,a=A,lbx=LBX,ubx=UBX,lba=LBA,uba=UBA)
-          print("="*60); print("QP control return_status:", sq.stats().get("return_status"),
-                "x=", rq['x'].T)
+          # --- test_linear2: FIXED variable (lbx[1]==ubx[1]==3), direct solve ---
+          LBX2 = DM([-inf,3]); UBX2 = DM([inf,3])
+          ins2 = dict(h=H,g=G,a=A,lbx=LBX2,ubx=UBX2,lba=LBA,uba=UBA)
+          for be in ("sparse_ldlt","dense_cholesky"):
+              print("="*60); print("test_linear2 (fixed var x1=3)", be)
+              s = ca.conic("s2","piqp",{'h':H.sparsity(),'a':A.sparsity()},
+                           {"piqp":{"kkt_solver":be,"verbose":True},"error_on_fail":False})
+              r = s(**ins2)
+              print("  return_status:", s.stats().get("return_status"),
+                    "x=", r['x'].T, "expect [2,3] cost", float(r['cost']), "expect 7")
+
+          # --- test_linear via serialize round-trip (what check_serialize does) ---
+          print("="*60); print("test_linear via serialize round-trip")
+          s = ca.conic("s","piqp",{'h':H.sparsity(),'a':A.sparsity()},
+                       {"piqp":{"kkt_solver":"sparse_ldlt"},"error_on_fail":False})
+          try:
+              s2 = ca.Function.deserialize(s.serialize({"debug":True}))
+              r2 = s2(**ins)
+              print("  deserialized return_status:", s2.stats().get("return_status"),
+                    "x=", r2['x'].T, "expect [0.5,1.5]")
+          except Exception as e:
+              print("  SERIALIZE EXCEPTION:", repr(e))
           PY
