@@ -15,7 +15,7 @@ jobs:
       - name: Download fresh PIQP-enabled win64 build
         shell: bash
         run: |
-          wget -q https://github.com/casadi/debug/releases/download/piqp-win-fresh/casadi-windows64-py311.zip -O casadi.zip
+          curl -sSL https://github.com/casadi/debug/releases/download/piqp-win-fresh/casadi-windows64-py311.zip -o casadi.zip
           mkdir -p cs && unzip -q casadi.zip -d cs
           ls cs/casadi/libcasadi_conic_piqp.dll
 
