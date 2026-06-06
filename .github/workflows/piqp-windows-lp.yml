@@ -35,4 +35,9 @@ jobs:
           export SKIP_WORHP_TESTS=1   # known unrelated worhp crash
           cd src/test/python
           python -c "import casadi; print('casadi',casadi.__version__,'piqp',casadi.has_conic('piqp'))"
-          echo "==== full conic.py ===="; python conic.py 2>&1 | tail -60 || echo "EXIT=$?"
+          echo "==== full conic.py ===="
+          python conic.py > out.txt 2>&1 || echo "EXIT=$?"
+          echo "---- failure summary ----"
+          grep -nE "ERROR:|FAIL:|FAILED|errors=|Ran [0-9]+ tests" out.txt || true
+          echo "---- traceback context ----"
+          grep -nA 12 "ERROR: " out.txt | head -60 || true
