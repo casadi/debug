@@ -35,14 +35,18 @@ jobs:
           export SKIP_WORHP_TESTS=1   # known unrelated worhp crash
           cd src/test/python
           python -c "import casadi; print('casadi',casadi.__version__,'piqp',casadi.has_conic('piqp'))"
+          set +e   # do NOT abort on a failing attempt
           for i in 1 2 3 4 5; do
             echo "############ conic.py attempt $i ############"
             python conic.py > out_$i.txt 2>&1; rc=$?
-            echo "exit=$rc  verdict: $(grep -aE '^OK$|^OK |^FAILED' out_$i.txt | tail -1)"
+            echo "exit=$rc  verdict: $(grep -aE '^OK$|^OK \(|^FAILED' out_$i.txt | tail -1)"
             if [ $rc -ne 0 ]; then
               echo "---- real test errors/failures ----"
-              grep -anE "^(ERROR|FAIL): (test|conic)" out_$i.txt || true
-              echo "---- traceback ----"
-              grep -anA 18 -E "^(ERROR|FAIL): test" out_$i.txt | head -40 || true
+              grep -anE "^(ERROR|FAIL): (test|conic)" out_$i.txt
+              echo "---- traceback (real test) ----"
+              grep -anA 20 -E "^(ERROR|FAIL): test" out_$i.txt | head -45
+              echo "---- tail of run ----"
+              tail -15 out_$i.txt
             fi
           done
+          true
