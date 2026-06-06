@@ -1,0 +1,74 @@
+name: PIQP LP failure on Windows (nightly-piqp2)
+
+on: [push, workflow_dispatch]
+
+jobs:
+  diag:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4.1.1
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Download PIQP-enabled Windows wheel
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release download nightly-piqp2 --repo casadi/casadi \
+            --pattern 'casadi-*+piqp2-cp311-none-win_amd64.whl' --dir .
+          ls -la
+
+      - name: Install
+        shell: bash
+        run: |
+          python -m pip install --upgrade pip numpy
+          python -m pip install casadi-*+piqp2-cp311-none-win_amd64.whl
+          python -c "import casadi; print('casadi', casadi.__version__, 'has piqp', casadi.has_conic('piqp'))"
+
+      - name: Reproduce test_linear (LP) with PIQP, both backends
+        shell: bash
+        run: |
+          python - <<'PY'
+          import casadi as ca
+          from casadi import inf, DM
+
+          # exact test_linear data (pure LP: empty Hessian)
+          H = DM(2,2)
+          A = DM([[-1,1],[1,1],[1,-2]])
+          LBA = DM([-inf,2,-inf]); UBA = DM([1,inf,4])
+          LBX = DM([-inf,0]);      UBX = DM([inf,inf])
+          G   = DM([2,1])
+          ins = dict(h=H,g=G,a=A,lbx=LBX,ubx=UBX,lba=LBA,uba=UBA)
+          expect_x = DM([0.5,1.5]); expect_cost = 2.5
+
+          def run(tag, opts):
+              print("="*60); print(tag, opts)
+              try:
+                  s = ca.conic("s","piqp",{'h':H.sparsity(),'a':A.sparsity()},
+                               {**opts, "error_on_fail": False})
+                  r = s(**ins)
+                  st = s.stats()
+                  print("  return_status:", st.get("return_status"))
+                  print("  success      :", st.get("success"))
+                  print("  x   :", r['x'].T, " expect", expect_x.T)
+                  print("  cost:", float(r['cost']), " expect", expect_cost)
+              except Exception as e:
+                  print("  EXCEPTION:", repr(e))
+
+          # LP, both backends, verbose
+          run("LP sparse_ldlt",   {"piqp":{"kkt_solver":"sparse_ldlt","verbose":True}})
+          run("LP dense_cholesky",{"piqp":{"kkt_solver":"dense_cholesky","verbose":True}})
+          run("LP sparse default",{"piqp":{}})
+
+          # QP control: add a Hessian -> does PIQP work for QP on Windows?
+          import casadi as ca2
+          Hq = DM([[2,0],[0,2]])
+          sq = ca.conic("sq","piqp",{'h':Hq.sparsity(),'a':A.sparsity()},
+                        {"piqp":{"verbose":False},"error_on_fail":False})
+          rq = sq(h=Hq,g=G,a=A,lbx=LBX,ubx=UBX,lba=LBA,uba=UBA)
+          print("="*60); print("QP control return_status:", sq.stats().get("return_status"),
+                "x=", rq['x'].T)
+          PY
