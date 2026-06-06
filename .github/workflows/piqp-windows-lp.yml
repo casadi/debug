@@ -1,4 +1,4 @@
-name: PIQP LP failure on Windows (nightly-piqp2)
+name: PIQP LP failure on Windows (fresh f38ca70abf)
 
 on: [push, workflow_dispatch]
 
@@ -12,28 +12,26 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Download PIQP-enabled Windows wheel
+      - name: Download fresh PIQP-enabled win64 build
         shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
         run: |
-          gh release download nightly-piqp2 --repo casadi/casadi \
-            --pattern 'casadi-*+piqp2-cp311-none-win_amd64.whl' --dir .
-          ls -la
+          wget -q https://github.com/casadi/debug/releases/download/piqp-win-fresh/casadi-windows64-py311.zip -O casadi.zip
+          mkdir -p cs && unzip -q casadi.zip -d cs
+          ls cs/casadi/libcasadi_conic_piqp.dll
 
-      - name: Install
+      - name: Install numpy
         shell: bash
-        run: |
-          python -m pip install --upgrade pip numpy
-          python -m pip install casadi-*+piqp2-cp311-none-win_amd64.whl
-          python -c "import casadi; print('casadi', casadi.__version__, 'has piqp', casadi.has_conic('piqp'))"
+        run: python -m pip install --upgrade pip numpy
 
       - name: Reproduce test_linear (LP) with PIQP, both backends
         shell: bash
+        env:
+          PYTHONPATH: ${{ github.workspace }}/cs
         run: |
           python - <<'PY'
           import casadi as ca
           from casadi import inf, DM
+          print("casadi", ca.__version__, "has piqp", ca.has_conic("piqp"))
 
           # exact test_linear data (pure LP: empty Hessian)
           H = DM(2,2)
@@ -58,13 +56,11 @@ jobs:
               except Exception as e:
                   print("  EXCEPTION:", repr(e))
 
-          # LP, both backends, verbose
           run("LP sparse_ldlt",   {"piqp":{"kkt_solver":"sparse_ldlt","verbose":True}})
           run("LP dense_cholesky",{"piqp":{"kkt_solver":"dense_cholesky","verbose":True}})
           run("LP sparse default",{"piqp":{}})
 
-          # QP control: add a Hessian -> does PIQP work for QP on Windows?
-          import casadi as ca2
+          # QP control: does PIQP solve a QP on Windows?
           Hq = DM([[2,0],[0,2]])
           sq = ca.conic("sq","piqp",{'h':Hq.sparsity(),'a':A.sparsity()},
                         {"piqp":{"verbose":False},"error_on_fail":False})
