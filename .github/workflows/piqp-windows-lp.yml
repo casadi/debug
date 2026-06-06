@@ -32,13 +32,7 @@ jobs:
         env:
           PYTHONPATH: ${{ github.workspace }}/cs
         run: |
-          # skip every other conic/nlpsol solver so only piqp's entries run
-          for s in IPOPT WORHP QPOASES OSQP HIGHS CLP CBC GUROBI CPLEX QRQP NLPSOL \
-                   PROXQP SUPERSCS HPIPM FATROP DAQP OOQP SLEQP KNITRO MADNLP \
-                   BONMIN AMPL BLOCKSQP SNOPT MOSEK XPRESS CCOPT ALPAQA; do
-            export SKIP_${s}_TESTS=1
-          done
+          export SKIP_WORHP_TESTS=1   # known unrelated worhp crash
           cd src/test/python
           python -c "import casadi; print('casadi',casadi.__version__,'piqp',casadi.has_conic('piqp'))"
-          echo "==== test_linear ===="; python conic.py ConicTests.test_linear  || echo "EXIT=$?"
-          echo "==== test_linear2 ===="; python conic.py ConicTests.test_linear2 || echo "EXIT=$?"
+          echo "==== full conic.py ===="; python conic.py 2>&1 | tail -60 || echo "EXIT=$?"
