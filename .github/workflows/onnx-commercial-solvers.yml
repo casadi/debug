@@ -1,0 +1,31 @@
+name: ONNX commercial_solvers (no pivot) reuse
+on: [push, workflow_dispatch]
+# Drop the pip-reuse pivot. Question: does the shipped wheel's onnx plugin bind the REAL
+# onnxruntime supplied on LD_LIBRARY_PATH (commercial_solvers style), or does the bundled
+# mockup stub in casadi/ ($ORIGIN) shadow it? Decides whether we keep shipping the stub.
+jobs:
+  cs:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4.1.1
+      - uses: actions/setup-python@v5
+        with: { python-version: '3.12' }
+      - name: Install wheel + onnx (NO pip onnxruntime)
+        run: |
+          pip install numpy onnx
+          pip install "https://github.com/casadi/casadi/releases/download/nightly-lacemodelica2/casadi-3.7.2.dev+lacemodelica2-cp311-abi3-manylinux_2_28_x86_64.whl"
+      - name: Download real ORT dist (what commercial_solvers grabs)
+        run: |
+          curl -fL -o ort.tgz https://github.com/microsoft/onnxruntime/releases/download/v1.22.0/onnxruntime-linux-x64-1.22.0.tgz
+          tar -xzf ort.tgz -C "$RUNNER_TEMP"
+          ls -l "$RUNNER_TEMP/onnxruntime-linux-x64-1.22.0/lib"/libonnxruntime*
+      - name: Inspect plugin RPATH/RUNPATH + shipped stub
+        run: |
+          set +e
+          CAS=$(python -c "import casadi,os;print(os.path.dirname(casadi.__file__))")
+          ls -l "$CAS"/libonnxruntime*
+          readelf -d "$CAS"/libcasadi_onnx_ort.so* 2>/dev/null | grep -iE "RPATH|RUNPATH|NEEDED.*onnx"
+      - name: A) baseline (no LD_LIBRARY_PATH) -> expect mockup
+        run: python runnum.py 2>&1 || true
+      - name: B) LD_LIBRARY_PATH=dist (commercial_solvers style) -> real?
+        run: LD_LIBRARY_PATH="$RUNNER_TEMP/onnxruntime-linux-x64-1.22.0/lib" python runnum.py 2>&1 || true
