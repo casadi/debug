@@ -1,0 +1,34 @@
+name: ONNX linux pip-onnxruntime reuse diagnosis
+
+on:
+  push:
+  workflow_dispatch:
+
+# casadi/casadi lacemodelica2 test-python on ubuntu-x64 fails: the onnx (ort) plugin binds the
+# SHIPPED mockup stub (NULL OrtApi) instead of the pip onnxruntime lib in-process. Pull that
+# exact wheel and test, per-scenario in isolated subprocesses, which load wins and what fixes it.
+jobs:
+  diag:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4.1.1
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install wheel + deps
+        run: |
+          pip install numpy onnx onnxruntime
+          pip install "https://github.com/casadi/casadi/releases/download/nightly-lacemodelica2/casadi-3.7.2.dev+lacemodelica2-cp311-abi3-manylinux_2_28_x86_64.whl"
+          python -c "import onnxruntime,os;print('onnxruntime',onnxruntime.__version__,os.path.dirname(onnxruntime.__file__))"
+      - name: Inspect shipped libs
+        run: |
+          set +e
+          CAS=$(python -c "import casadi,os;print(os.path.dirname(casadi.__file__))")
+          echo "casadi dir: $CAS"; ls -l "$CAS"/libonnxruntime*
+          echo "--- shipped stub soname ---"; readelf -d "$CAS"/libonnxruntime.so.1.22.0 2>/dev/null | grep -i soname
+          echo "--- ort plugin NEEDED onnx ---"; readelf -d "$CAS"/libcasadi_onnx_ort.so* 2>/dev/null | grep -i needed | grep -i onnx
+          PIP=$(python -c "import onnxruntime,os;print(os.path.join(os.path.dirname(onnxruntime.__file__),'capi'))")
+          echo "pip capi: $PIP"; ls -l "$PIP"/libonnxruntime*
+          readelf -d "$PIP"/libonnxruntime.so.1* 2>/dev/null | grep -i soname
+      - name: Run scenarios (s1 baseline, s2 import, s3 session, s4 ctypes-preload)
+        run: python onnx_diag.py
