@@ -1,29 +1,27 @@
-name: ONNX graph_builder test against wheel
-
-on:
-  push:
-  workflow_dispatch:
-
-# Validate the fixed test/python/graph_builder.py (pip onnxruntime preload + have_real_ort gate)
-# against the shipped lacemodelica2 wheel, without a casadi rebuild. Overlays this repo's
-# graph_builder.py onto the casadi test harness (helpers.py etc).
+name: ONNX graph_builder vs wheel (commercial_solvers ORT, no pivot)
+on: [push, workflow_dispatch]
+# Validate the no-pivot graph_builder.py: pip onnx only (NO pip onnxruntime); real ORT supplied
+# on LD_LIBRARY_PATH (commercial_solvers style). Expect: numeric SKIPS without it, RUNS with it.
 jobs:
   gb:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4.1.1
       - uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-      - name: Get casadi test harness (lacemodelica2)
+        with: { python-version: '3.12' }
+      - name: casadi test harness + overlay fixed graph_builder.py
         run: |
           git clone --depth 1 --branch lacemodelica2 https://github.com/casadi/casadi.git cas
           cp graph_builder.py cas/test/python/graph_builder.py
-      - name: Install wheel + deps
+      - name: Install wheel + onnx (NO onnxruntime)
         run: |
-          pip install numpy onnx onnxruntime
+          pip install numpy onnx
           pip install "https://github.com/casadi/casadi/releases/download/nightly-lacemodelica2/casadi-3.7.2.dev+lacemodelica2-cp311-abi3-manylinux_2_28_x86_64.whl"
-      - name: Run graph_builder.py (numeric + symbolic)
+      - name: Download real ORT dist
         run: |
-          cd cas/test/python
-          python graph_builder.py 2>&1 | tail -40
+          curl -fL -o ort.tgz https://github.com/microsoft/onnxruntime/releases/download/v1.22.0/onnxruntime-linux-x64-1.22.0.tgz
+          tar -xzf ort.tgz -C "$RUNNER_TEMP"
+      - name: A) NO real ORT -> numeric should SKIP, symbolic run
+        run: cd cas/test/python && python graph_builder.py 2>&1 | tail -8
+      - name: B) LD_LIBRARY_PATH=dist (commercial_solvers) -> numeric should RUN+pass
+        run: cd cas/test/python && LD_LIBRARY_PATH="$RUNNER_TEMP/onnxruntime-linux-x64-1.22.0/lib" python graph_builder.py 2>&1 | tail -8

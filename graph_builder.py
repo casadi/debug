@@ -46,29 +46,37 @@ try:
 except ImportError:
   has_onnxruntime = False
 
-# Preload the pip onnxruntime native lib so the casadi ort plugin reuses it in-process.
-# The pip wheel statically embeds ORT in its pybind module and does NOT auto-load the
-# standalone libonnxruntime.so, so `import onnxruntime` is not enough -- we CDLL it
-# RTLD_GLOBAL; its soname (libonnxruntime.so.1) then satisfies the plugin's NEEDED,
-# bypassing the bundled mockup stub. Must run before has_onnx("ort") loads the plugin.
-have_real_ort = False
-if has_onnxruntime:
-  try:
-    import ctypes, glob
-    _capi = os.path.join(os.path.dirname(ort.__file__), "capi")
-    _libs = sorted(glob.glob(os.path.join(_capi, "libonnxruntime.so*")) +
-                   glob.glob(os.path.join(_capi, "libonnxruntime*.dylib")))
-    if _libs:
-      ctypes.CDLL(_libs[0], mode=ctypes.RTLD_GLOBAL)
-      have_real_ort = True
-  except Exception:
-    have_real_ort = False
-
 # the onnxruntime numeric backend (built alongside the GraphModel onnx backend)
 try:
   have_backend = ca.has_onnx("ort")
 except Exception:
   have_backend = False
+
+# has_onnx("ort") is True even with the bundled mockup stub (which yields a NULL OrtApi).
+# The real ONNX Runtime is supplied on the loader path like every other mockup (commercial_solvers;
+# the plugin's RUNPATH=$ORIGIN lets LD_LIBRARY_PATH win over the shipped stub). Probe an actual
+# create to tell real from mockup, and gate the numeric suite on it.
+have_real_ort = False
+if have_onnx and have_backend:
+  try:
+    import tempfile as _tf
+    _fd, _probe = _tf.mkstemp(suffix=".onnx"); os.close(_fd)
+    _g = helper.make_graph(
+        [helper.make_node("Add", ["x", "a"], ["y"])], "probe",
+        [helper.make_tensor_value_info("x", TensorProto.FLOAT, [1])],
+        [helper.make_tensor_value_info("y", TensorProto.FLOAT, [1])],
+        [numpy_helper.from_array(numpy.full((1,), 1.0, numpy.float32), "a")])
+    _m = helper.make_model(_g, opset_imports=[helper.make_opsetid("", 13)]); _m.ir_version = 8
+    onnx.save(_m, _probe)
+    ca.GraphBuilder(_probe).create("ort_probe")   # raises with the mockup (NULL OrtApi)
+    have_real_ort = True
+  except Exception:
+    have_real_ort = False
+  finally:
+    try:
+      os.remove(_probe)
+    except Exception:
+      pass
 
 # the GraphModel onnx (symbolic import/export) backend; absent on WITH_ONNX=OFF builds
 try:
