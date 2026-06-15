@@ -39,11 +39,13 @@ def scenario(name):
         ort.InferenceSession(MODEL)
         print("  made InferenceSession; maps now:", maps())
         core()
-    elif name == "s4":                     # ctypes preload pip libonnxruntime RTLD_GLOBAL first
-        import ctypes, onnxruntime
-        lib = os.path.join(os.path.dirname(onnxruntime.__file__), "capi", "libonnxruntime.so.1")
-        ctypes.CDLL(lib, mode=ctypes.RTLD_GLOBAL)
-        print("  ctypes-preloaded", lib, "; maps now:", maps())
+    elif name == "s4":                     # ctypes preload the ACTUAL pip libonnxruntime RTLD_GLOBAL
+        import ctypes, onnxruntime, glob
+        capi = os.path.join(os.path.dirname(onnxruntime.__file__), "capi")
+        cands = sorted(glob.glob(os.path.join(capi, "libonnxruntime.so*")))
+        print("  pip libonnxruntime candidates:", cands)
+        ctypes.CDLL(cands[0], mode=ctypes.RTLD_GLOBAL)
+        print("  ctypes-preloaded", cands[0], "; maps now:", maps())
         core()
 
 if __name__ == "__main__":
