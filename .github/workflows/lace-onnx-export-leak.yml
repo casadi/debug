@@ -34,30 +34,27 @@ jobs:
           git clone --depth 1 --branch lacemodelica2 https://github.com/casadi/casadi.git src
           echo "HEAD:"; git -C src rev-parse HEAD
 
-      - name: Run conic.py as CI does (faulthandler + verbose)
+      - name: Sanity - conic.py is NOT the culprit (should pass)
         working-directory: src/test/python
         continue-on-error: true
         run: |
           set +e
-          PYTHONFAULTHANDLER=1 python conic.py --ignore_memory_heavy > out.txt 2>&1
-          code=$?
-          echo "=================== EXIT=$code ==================="
-          echo "----- last 90 lines (verbose test stream + any faulthandler dump) -----"
-          tail -90 out.txt
-          echo "----- last test STARTED before end of stream (likely culprit) -----"
-          grep -nE '^test_[A-Za-z0-9_]+ \(' out.txt | tail -3
-          echo "::notice::conic exit code $code"
+          PYTHONFAULTHANDLER=1 python conic.py --ignore_memory_heavy > conic.txt 2>&1
+          echo "::notice::conic.py exit=$? (expect 0)"
+          tail -3 conic.txt
 
-      - name: Re-run under gdb for C++ backtrace
+      - name: Replicate the REAL bug - graph_builder.py ONNX export leak under valgrind
         working-directory: src/test/python
         continue-on-error: true
         run: |
-          sudo apt-get update -qq && sudo apt-get install -y -qq gdb
+          sudo apt-get update -qq && sudo apt-get install -y -qq valgrind
           set +e
-          gdb -q -batch \
-            -ex "run conic.py --ignore_memory_heavy" \
-            -ex "echo \n=== BACKTRACE ===\n" -ex "bt" \
-            -ex "echo \n=== PY-LIKE FRAMES ===\n" -ex "bt full" \
-            --args python conic.py --ignore_memory_heavy > gdb.txt 2>&1
-          echo "----- gdb tail -----"
-          tail -120 gdb.txt
+          valgrind --tool=memcheck --leak-check=full --show-leak-kinds=definite \
+                   --error-exitcode=99 --num-callers=20 \
+                   python graph_builder.py --ignore_memory_heavy > vg.txt 2>&1
+          code=$?
+          echo "=================== valgrind exit=$code (99 => leak detected) ==================="
+          echo "----- definitely-lost summary -----"
+          grep -nE "definitely lost|Memory leak:|ERROR SUMMARY" vg.txt | tail -10
+          echo "----- leak stack (function_to_function_proto) -----"
+          grep -nE "function_to_function_proto|export_call|Onnx::load|export_symbolic|export_onnx|definitely lost|operator new" vg.txt | tail -25
