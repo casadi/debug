@@ -1,0 +1,63 @@
+name: lacemodelica2 conic.py segfault repro (ubuntu manylinux2014)
+
+on: [push, workflow_dispatch]
+
+jobs:
+  repro:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Runner baseline
+        run: |
+          uname -a
+          cat /etc/os-release | head -3
+          getconf PAGE_SIZE
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Download lacemodelica2 abi3 wheel + install
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release download nightly-lacemodelica2 --repo casadi/casadi \
+            --pattern '*cp311-abi3-manylinux2014_x86_64.whl' -O casadi.whl
+          ls -la casadi.whl
+          python -m pip install --upgrade pip
+          python -m pip install numpy scipy casadi.whl
+          python -c "import casadi; print('casadi', casadi.CasadiMeta.version(), casadi.CasadiMeta.git_revision())" || true
+
+      - name: Fetch test sources (lacemodelica2)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git clone --depth 1 --branch lacemodelica2 https://github.com/casadi/casadi.git src
+          echo "HEAD:"; git -C src rev-parse HEAD
+
+      - name: Run conic.py as CI does (faulthandler + verbose)
+        working-directory: src/test/python
+        continue-on-error: true
+        run: |
+          set +e
+          PYTHONFAULTHANDLER=1 python conic.py --ignore_memory_heavy > out.txt 2>&1
+          code=$?
+          echo "=================== EXIT=$code ==================="
+          echo "----- last 90 lines (verbose test stream + any faulthandler dump) -----"
+          tail -90 out.txt
+          echo "----- last test STARTED before end of stream (likely culprit) -----"
+          grep -nE '^test_[A-Za-z0-9_]+ \(' out.txt | tail -3
+          echo "::notice::conic exit code $code"
+
+      - name: Re-run under gdb for C++ backtrace
+        working-directory: src/test/python
+        continue-on-error: true
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq gdb
+          set +e
+          gdb -q -batch \
+            -ex "run conic.py --ignore_memory_heavy" \
+            -ex "echo \n=== BACKTRACE ===\n" -ex "bt" \
+            -ex "echo \n=== PY-LIKE FRAMES ===\n" -ex "bt full" \
+            --args python conic.py --ignore_memory_heavy > gdb.txt 2>&1
+          echo "----- gdb tail -----"
+          tail -120 gdb.txt
