@@ -21,10 +21,10 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release download nightly-lacemodelica2 --repo casadi/casadi \
-            --pattern '*cp311-abi3-manylinux2014_x86_64.whl' -O casadi.whl
-          ls -la casadi.whl
+            --pattern '*cp311-abi3-manylinux2014_x86_64.whl'
+          ls -la *.whl
           python -m pip install --upgrade pip
-          python -m pip install numpy scipy casadi.whl
+          python -m pip install numpy scipy ./*cp311-abi3-manylinux2014_x86_64.whl
           python -c "import casadi; print('casadi', casadi.CasadiMeta.version(), casadi.CasadiMeta.git_revision())" || true
 
       - name: Fetch test sources (lacemodelica2)
