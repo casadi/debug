@@ -132,9 +132,14 @@ jobs:
           # arm64 slice matches and system tools (arm64e) aren't broken by a
           # global DYLD_INSERT_LIBRARIES.
           ASANOPTS="detect_leaks=0:detect_container_overflow=0:detect_odr_violation=0:halt_on_error=1:abort_on_error=1:symbolize=1:print_stats=0:log_path=/tmp/asan"
-          arch -arm64 /usr/bin/env DYLD_INSERT_LIBRARIES="$ASAN_DYLIB" ASAN_OPTIONS="$ASANOPTS" "$PY" -c "import casadi; print('casadi', casadi.__version__)"
+          # python is plain arm64 (see `file` above) and so is the asan dylib's
+          # arm64 slice -> no `arch` needed. Set DYLD_INSERT_LIBRARIES INLINE on
+          # python only (NOT global, NOT via arch/env): the SIP-protected
+          # /usr/bin/arch|env strip DYLD_* so asan loaded late -> interceptors
+          # dead. MallocNanoZone=0 is required for asan malloc interception on macOS.
+          DYLD_INSERT_LIBRARIES="$ASAN_DYLIB" ASAN_OPTIONS="$ASANOPTS" MallocNanoZone=0 "$PY" -c "import casadi; print('casadi', casadi.__version__)"
           cd src/test/python
-          arch -arm64 /usr/bin/env DYLD_INSERT_LIBRARIES="$ASAN_DYLIB" ASAN_OPTIONS="$ASANOPTS" "$PY" alltests.py --run_slow 2>&1 | tee /tmp/run.log
+          DYLD_INSERT_LIBRARIES="$ASAN_DYLIB" ASAN_OPTIONS="$ASANOPTS" MallocNanoZone=0 "$PY" alltests.py --run_slow 2>&1 | tee /tmp/run.log
           echo "alltests rc=${PIPESTATUS[0]}"
           echo "=== ASan reports ==="
           for f in /tmp/asan.*; do echo "### $f"; cat "$f"; done 2>/dev/null
