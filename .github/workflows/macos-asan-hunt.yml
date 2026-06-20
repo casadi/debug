@@ -123,18 +123,18 @@ jobs:
           export PYTHONPATH="$PKG"
           export JULIA_CUDA_USE_COMPAT=false
           export DYLD_LIBRARY_PATH="/usr/local/lib:$PKG/casadi"
-          export DYLD_INSERT_LIBRARIES="$ASAN_DYLIB"
-          # Non-instrumented libc++/externals -> disable container/odr false positives.
-          export ASAN_OPTIONS="detect_leaks=0:detect_container_overflow=0:detect_odr_violation=0:halt_on_error=1:abort_on_error=1:symbolize=1:print_stats=0:log_path=/tmp/asan"
-          # diagnostics: arch of python + asan dylib
-          file "$(python -c 'import sys;print(sys.executable)')" || true
-          lipo -archs "$ASAN_DYLIB" || true
-          # conda clang-16 asan dylib is arm64 (no arm64e); run python as arm64
-          # so DYLD_INSERT_LIBRARIES accepts it.
           PY=$(python -c 'import sys;print(sys.executable)')
-          arch -arm64 "$PY" -c "import casadi; print('casadi', casadi.__version__)"
+          # diagnostics (NO DYLD_INSERT here, so system tools work)
+          file "$PY" || true
+          lipo -archs "$ASAN_DYLIB" || true
+          # The conda clang-16 asan dylib is fat x86_64,arm64 (no arm64e). Inject
+          # it ONLY into a python forced to arm64 (via arch -arm64 + env), so the
+          # arm64 slice matches and system tools (arm64e) aren't broken by a
+          # global DYLD_INSERT_LIBRARIES.
+          ASANOPTS="detect_leaks=0:detect_container_overflow=0:detect_odr_violation=0:halt_on_error=1:abort_on_error=1:symbolize=1:print_stats=0:log_path=/tmp/asan"
+          arch -arm64 /usr/bin/env DYLD_INSERT_LIBRARIES="$ASAN_DYLIB" ASAN_OPTIONS="$ASANOPTS" "$PY" -c "import casadi; print('casadi', casadi.__version__)"
           cd src/test/python
-          arch -arm64 "$PY" alltests.py --run_slow 2>&1 | tee /tmp/run.log
+          arch -arm64 /usr/bin/env DYLD_INSERT_LIBRARIES="$ASAN_DYLIB" ASAN_OPTIONS="$ASANOPTS" "$PY" alltests.py --run_slow 2>&1 | tee /tmp/run.log
           echo "alltests rc=${PIPESTATUS[0]}"
           echo "=== ASan reports ==="
           for f in /tmp/asan.*; do echo "### $f"; cat "$f"; done 2>/dev/null
