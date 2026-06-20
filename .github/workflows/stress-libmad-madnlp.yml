@@ -1,0 +1,95 @@
+name: stress libMad madnlp (polyglot vs apozharski)
+
+# Reproduces the test-python-long manylinux2014 segfault that struck
+# MadnlpInterface::init_mem -> libMad.so -> embedded-Julia init ->
+# CompilerSupportLibraries_jll -> dlopen -> libgomp -> SIGSEGV.
+#
+# A/B over the libMad source, each loaded by the SAME casadi nightly wheel:
+#   - apozharski : the third-party v0.0.7-casadi build (expected to crash)
+#   - polyglot   : casadi/polyglot evergreen build in our controlled
+#                  manylinux_2_28 container (bundles its own libgomp/libjulia)
+# Each runs a fresh-process madnlp init+solve 10x and counts crashes.
+# The polyglot leg must be 10/10 green; the apozharski leg is the control
+# (allowed to crash, recorded for comparison).
+
+on: [push, workflow_dispatch]
+
+jobs:
+  stress:
+    name: madnlp x10 (${{ matrix.libmad }})
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - libmad: polyglot
+            url: https://github.com/casadi/polyglot/releases/download/evergreen/libMad-x64.tar.gz
+          - libmad: apozharski
+            url: https://github.com/apozharski/libMad/releases/download/v0.0.7-casadi/libMad-ubuntu-x86_64-v0.0.7-casadi.tar.gz
+
+    steps:
+      - name: Runner baseline
+        run: |
+          uname -a
+          cat /etc/os-release | head -3
+          python3 --version
+          ldd --version | head -1
+
+      - name: Install casadi nightly wheel (cp311-abi3, manylinux2014)
+        run: |
+          set -eux
+          python3 -m venv /tmp/venv
+          . /tmp/venv/bin/activate
+          pip install -q --upgrade pip
+          pip install -q numpy
+          curl -fsSL -o /tmp/casadi.whl \
+            https://github.com/casadi/casadi/releases/download/nightly-release-3.8.0/casadi-3.8.0-cp311-abi3-manylinux2014_x86_64.whl
+          pip install -q /tmp/casadi.whl
+          python -c "import casadi; print('casadi', casadi.__version__)"
+
+      - name: Fetch libMad (${{ matrix.libmad }})
+        run: |
+          set -eux
+          mkdir -p /tmp/libMad
+          curl -fL -o /tmp/libMad.tar.gz "${{ matrix.url }}"
+          tar -xf /tmp/libMad.tar.gz -C /tmp/libMad
+          echo "=== lib contents ==="; ls /tmp/libMad/lib | head -30
+          echo "=== libMad.so SONAME / NEEDED ==="
+          objdump -p /tmp/libMad/lib/libMad.so | grep -E "SONAME|NEEDED" | head
+          echo "=== bundled libgomp? ==="
+          ls -la /tmp/libMad/lib/libgomp* 2>/dev/null || echo "(no bundled libgomp)"
+
+      - name: Stress madnlp init+solve x10 (fresh process each)
+        run: |
+          set +e
+          . /tmp/venv/bin/activate
+          export LD_LIBRARY_PATH=/tmp/libMad/lib:$LD_LIBRARY_PATH
+          export JULIA_CUDA_USE_COMPAT=false
+          cat > /tmp/madnlp_test.py <<'PY'
+          import casadi as ca
+          x = ca.MX.sym("x", 2)
+          f = (1 - x[0])**2 + 100*(x[1] - x[0]**2)**2
+          g = x[0]**2 + x[1]**2
+          nlp = {"x": x, "f": f, "g": g}
+          solver = ca.nlpsol("s", "madnlp", nlp)
+          sol = solver(x0=[0.0, 0.0], lbg=-10, ubg=10)
+          print("SOLVED x =", sol["x"])
+          PY
+          npass=0; nfail=0
+          for i in $(seq 1 10); do
+            python /tmp/madnlp_test.py > /tmp/out_$i.txt 2>&1
+            rc=$?
+            if [ $rc -eq 0 ]; then
+              npass=$((npass+1)); echo "run $i: OK"
+            else
+              nfail=$((nfail+1)); echo "run $i: FAIL rc=$rc (139=SIGSEGV)"
+              echo "----- tail of run $i -----"; tail -25 /tmp/out_$i.txt
+            fi
+          done
+          echo "=========================================="
+          echo "libMad=${{ matrix.libmad }}  PASS=$npass  FAIL=$nfail"
+          echo "=========================================="
+          # Polyglot must be perfect; apozharski is the (expected-crash) control.
+          if [ "${{ matrix.libmad }}" = "polyglot" ] && [ $nfail -ne 0 ]; then
+            exit 1
+          fi
