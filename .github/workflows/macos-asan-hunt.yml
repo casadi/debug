@@ -123,10 +123,17 @@ jobs:
           export PYTHONPATH="$PKG"
           export JULIA_CUDA_USE_COMPAT=false
           export DYLD_LIBRARY_PATH="/usr/local/lib:$PKG/casadi"
-          PY=$(python -c 'import sys;print(sys.executable)')
+          PY=$(python -c 'import sys,os;print(os.path.realpath(sys.executable))')
           # diagnostics (NO DYLD_INSERT here, so system tools work)
           file "$PY" || true
           lipo -archs "$ASAN_DYLIB" || true
+          codesign -d --verbose=2 "$PY" 2>&1 | grep -iE "flags|runtime|library-validation" || true
+          # anaconda python ships hardened runtime + library validation, so macOS
+          # IGNORES DYLD_INSERT_LIBRARIES of the unsigned asan dylib (asan then
+          # sneaks in late via the _casadi dlopen -> dead interceptors). Strip the
+          # signature to disable hardened runtime so DYLD_INSERT is honored.
+          sudo codesign --remove-signature "$PY" 2>&1 | tail -2 || true
+          codesign --remove-signature "$PY" 2>&1 | tail -2 || true
           # The conda clang-16 asan dylib is fat x86_64,arm64 (no arm64e). Inject
           # it ONLY into a python forced to arm64 (via arch -arm64 + env), so the
           # arm64 slice matches and system tools (arm64e) aren't broken by a
