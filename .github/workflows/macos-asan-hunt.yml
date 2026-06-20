@@ -23,14 +23,20 @@ jobs:
     runs-on: macos-14
     timeout-minutes: 350
     steps:
-      - name: Toolchain (Apple clang + gfortran + libomp)
+      # Curated toolchain CI uses to build all macOS externals cleanly
+      # (handles -noall_load / gfortran / cctools). Exports CC/CXX/FC/SDKROOT.
+      - uses: casadi/action-setup-compiler@master
+        with:
+          cache-suffix: ''
+          target: arm64
+
+      - name: Locate ASan runtime from the curated clang
         run: |
           set -eux
-          brew install gcc libomp || true
-          clang --version
-          echo "FC=$(ls $(brew --prefix gcc)/bin/gfortran* | head -1)" >> $GITHUB_ENV
-          ASAN_DYLIB=$(dirname $(xcrun -f clang))/../lib/clang/$(clang -dumpversion)/lib/darwin/libclang_rt.asan_osx_dynamic.dylib
-          ls -l "$ASAN_DYLIB" || ASAN_DYLIB=$(find $(dirname $(xcrun -f clang))/.. -name 'libclang_rt.asan_osx_dynamic.dylib' 2>/dev/null | head -1)
+          "$CC" --version
+          CLANGROOT=$(dirname "$(dirname "$CC")")
+          ASAN_DYLIB=$(find "$CLANGROOT" -name 'libclang_rt.asan_osx_dynamic.dylib' 2>/dev/null | head -1)
+          test -n "$ASAN_DYLIB"
           echo "ASAN_DYLIB=$ASAN_DYLIB" >> $GITHUB_ENV
           ls -l "$ASAN_DYLIB"
 
@@ -71,12 +77,9 @@ jobs:
           rm -f build/CMakeCache.txt
           ASANFLAGS="-fsanitize=address -fno-omit-frame-pointer -g -O1"
           PYEXE=$(python -c 'import sys;print(sys.executable)')
-          # coin-or/ipopt libtool emits -noall_load, rejected by the new macOS
-          # linker; force the classic linker (inherited by externals' configure).
-          export LDFLAGS="-Wl,-ld_classic"
-          cmake -Bbuild -H. \
+          CC="$CC" CXX="$CXX" FC="$FC" cmake -Bbuild -H. \
             -DCMAKE_BUILD_TYPE=RelWithDebInfo \
-            -DCMAKE_OSX_ARCHITECTURES=arm64 \
+            -DCMAKE_OSX_SYSROOT="$SDKROOT" -DCMAKE_OSX_ARCHITECTURES=arm64 \
             -DWITH_SELFCONTAINED=ON \
             -DWITH_DEEPBIND=OFF \
             -DSWIG_IMPORT=ON \
@@ -88,7 +91,7 @@ jobs:
             -DCMAKE_INSTALL_PREFIX="$PWD/../inst" \
             -DCMAKE_PREFIX_PATH="${{ github.workspace }}/mockups/cmake" \
             $build_flags
-          cmake --build build -j3
+          CC="$CC" CXX="$CXX" FC="$FC" cmake --build build -j3
           cmake --build build --target install
           cmake --build build --target install_python || true
           find ../inst -name "_casadi*.so" -o -name "__init__.py" -path "*casadi*" | head
