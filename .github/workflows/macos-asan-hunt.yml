@@ -140,13 +140,16 @@ jobs:
             -L"$CONDA_PREFIX/lib" -Wl,-rpath,"$CONDA_PREFIX/lib" -o /tmp/asan_runner
           file /tmp/asan_runner
           export PYTHONHOME="$CONDA_PREFIX"
-          # ASan ruled out OOB/UAF; the crash is a wild-pointer SEGV that Julia's
-          # handler masks. Run under lldb (intercepts SIGSEGV first) to get a
-          # SYMBOLICATED faulting frame. handle_segv=0 so asan yields the signal.
-          export ASAN_OPTIONS="detect_leaks=0:detect_container_overflow=0:detect_odr_violation=0:handle_segv=0:abort_on_error=0:symbolize=1"
+          ASANOPTS="detect_leaks=0:detect_container_overflow=0:detect_odr_violation=0:handle_segv=0:abort_on_error=0:symbolize=1"
+          export ASAN_OPTIONS="$ASANOPTS"
           /tmp/asan_runner -c "import casadi; print('casadi', casadi.__version__)"
           cd src/test/python
-          cat > /tmp/lldb_cmds.txt <<'L'
+          # Run under lldb to catch the wild-pointer SEGV before Julia's handler.
+          # lldb's OWN embedded python pollutes the launcher's python env, so
+          # disable env inheritance and set EXACTLY what the embed launcher needs.
+          cat > /tmp/lldb_cmds.txt <<L
+          settings set target.inherit-env false
+          settings set target.env-vars PYTHONHOME=$CONDA_PREFIX PYTHONPATH=$PKG DYLD_LIBRARY_PATH=/usr/local/lib:$PKG/casadi:$CONDA_PREFIX/lib JULIA_CUDA_USE_COMPAT=false ASAN_OPTIONS=$ASANOPTS PATH=$PATH
           run
           thread backtrace all
           frame select 0
