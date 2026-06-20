@@ -71,6 +71,9 @@ jobs:
           rm -f build/CMakeCache.txt
           ASANFLAGS="-fsanitize=address -fno-omit-frame-pointer -g -O1"
           PYEXE=$(python -c 'import sys;print(sys.executable)')
+          # coin-or/ipopt libtool emits -noall_load, rejected by the new macOS
+          # linker; force the classic linker (inherited by externals' configure).
+          export LDFLAGS="-Wl,-ld_classic"
           cmake -Bbuild -H. \
             -DCMAKE_BUILD_TYPE=RelWithDebInfo \
             -DCMAKE_OSX_ARCHITECTURES=arm64 \
