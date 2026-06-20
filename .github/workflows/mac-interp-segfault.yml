@@ -79,7 +79,7 @@ jobs:
           PY
           DYLD_LIBRARY_PATH=/usr/local/lib python /tmp/B.py; echo "B) rc=$?"
 
-      - name: C) Faithful: alltests.py --run_slow with libMad
+      - name: "C) Faithful alltests.py --run_slow with libMad"
         run: |
           set +e
           . /tmp/venv/bin/activate
