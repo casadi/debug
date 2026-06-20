@@ -1,12 +1,13 @@
 name: mac 2d linear interpolant nested-AD segfault
 
 # Reproduce the macos-14 test-python-long SIGSEGV in
-# function.Functiontests.test_2d_linear_multiout:
-#   ca.MX.forward -> Call::ad_forward -> LinearInterpolantJac::get_jacobian
-#   -> XFunction::get_jacobian -> veccat/vertcat -> Sparsity::triplet
-#   -> Sparsity::assign_cached -> SIGSEGV
-# Passes on Linux (benign heap layout); only crashes on macOS arm64.
-# Uses the nightly-release-3.8.0 cp311-abi3 macosx_11_0_arm64 wheel.
+# function.Functiontests.test_2d_linear_multiout
+#   ... LinearInterpolantJac::get_jacobian -> XFunction::get_jacobian
+#   -> veccat -> Sparsity::triplet -> Sparsity::assign_cached -> SIGSEGV
+# Crash log shows Julia's GC line => libMad/Julia is loaded in-process.
+# Isolated repros (no Julia) pass on Linux AND macOS; this harness loads
+# libMad first to recreate the real condition. Staged so we learn the
+# minimal trigger.
 
 on: [push, workflow_dispatch]
 
@@ -14,11 +15,6 @@ jobs:
   repro:
     runs-on: macos-14
     steps:
-      - name: Baseline
-        run: |
-          uname -a; sw_vers || true
-          python3 --version
-
       - name: Install casadi nightly wheel (macos arm64)
         run: |
           set -eux
@@ -31,47 +27,63 @@ jobs:
           pip install -q "/tmp/$WHL"
           python -c "import casadi; print('casadi', casadi.__version__)"
 
-      - name: Minimal escalating repro (isolate the crashing op)
+      - name: Fetch + install libMad (apple-aarch64, like commercial_solvers)
         run: |
-          set +e
-          . /tmp/venv/bin/activate
-          cat > /tmp/repro.py <<'PY'
-          import casadi as ca, numpy as np
-          np.random.seed(0)
-          d_knots=[list(np.linspace(0,1,5)),list(np.linspace(0,1,6))]
-          data0=np.random.random([5,6]); data1=np.random.random([5,6])
-          stacked=np.vstack((data0.ravel(order='F'),data1.ravel(order='F'))).ravel(order='F')
-          LUT=ca.interpolant('name','linear',d_knots,stacked)  # m=2
-          x=ca.MX.sym("x"); y=ca.MX.sym("y")
-          f=ca.Function('f',[x,y],[LUT(ca.vertcat(x,y))])
+          set -eux
+          mkdir -p "$RUNNER_TEMP/libMad"
+          curl -fL -o "$RUNNER_TEMP/libMad/libMad.tar.gz" \
+            "https://github.com/apozharski/libMad/releases/download/v0.0.7-casadi/libMad-apple-aarch64-v0.0.7-casadi.tar.gz"
+          tar -xf "$RUNNER_TEMP/libMad/libMad.tar.gz" -C "$RUNNER_TEMP/libMad"
+          sudo cp -R "$RUNNER_TEMP/libMad/lib/" /usr/local/lib/ || true
+          if [ -d "$RUNNER_TEMP/libMad/share" ]; then sudo cp -R "$RUNNER_TEMP/libMad/share/" /usr/local/share/ || true; fi
+          echo "JULIA_CUDA_USE_COMPAT=false" >> $GITHUB_ENV
 
-          def probe(tag, fn):
-              print(f"--- PROBE {tag} ---", flush=True)
-              fn()
-              print(f"--- PROBE {tag} OK ---", flush=True)
-
-          probe("forward-of-forward", lambda: f.forward(1).forward(1))
-          probe("jac-of-jac", lambda: f.jacobian().jacobian())
-
-          def sym_forward_of_jac():
-              Jf=f.jacobian()
-              ins=[ca.MX.sym("i%d"%i, Jf.sparsity_in(i)) for i in range(Jf.n_in())]
-              res=Jf.call(ins)
-              fseeds=[ca.MX.sym("s%d"%i, Jf.sparsity_in(i)) for i in range(Jf.n_in())]
-              sens=ca.forward(res, ins, [fseeds])[0]   # crash expected here
-              vf=ca.Function("vf", ins+fseeds, list(res)+list(sens))
-          probe("sym-forward-of-jac", sym_forward_of_jac)
-
-          print("ALL PROBES SURVIVED", flush=True)
-          PY
-          python /tmp/repro.py
-          echo "minimal-repro rc=$?"
-
-      - name: Full test (faithful repro)
+      - name: A) Full function.py (no Julia) — heap-state-only hypothesis
         run: |
           set +e
           . /tmp/venv/bin/activate
           git clone --depth 1 --branch release-3.8.0 https://github.com/casadi/casadi.git src
           cd src/test/python
-          python function.py Functiontests.test_2d_linear_multiout
-          echo "full-test rc=$?"
+          python function.py > /tmp/A.log 2>&1; echo "A) full function.py rc=$?"
+          tail -3 /tmp/A.log
+
+      - name: B) Load libMad/Julia (madnlp), THEN interpolant nested-AD
+        run: |
+          set +e
+          . /tmp/venv/bin/activate
+          export JULIA_CUDA_USE_COMPAT=false
+          cat > /tmp/B.py <<'PY'
+          import casadi as ca, numpy as np
+          # Force-load libMad/Julia via a madnlp solve
+          x=ca.MX.sym("x",2)
+          nlp={"x":x,"f":(1-x[0])**2+100*(x[1]-x[0]**2)**2}
+          try:
+              s=ca.nlpsol("s","madnlp",nlp); print("madnlp solve:", s(x0=[0,0])["x"])
+              print("JULIA LOADED", flush=True)
+          except Exception as e:
+              print("madnlp unavailable:", e, flush=True)
+          # Now the crashing nested-AD on the 2D multi-output linear interpolant
+          np.random.seed(0)
+          d=[list(np.linspace(0,1,5)),list(np.linspace(0,1,6))]
+          vals=list(np.random.random(60))
+          LUT=ca.interpolant('n','linear',d,vals)
+          a=ca.MX.sym("a"); b=ca.MX.sym("b")
+          f=ca.Function('f',[a,b],[LUT(ca.vertcat(a,b))])
+          for it in range(50):
+              J=f.jacobian()
+              ins=[ca.MX.sym('i%d'%i,J.sparsity_in(i)) for i in range(J.n_in())]
+              res=J.call(ins)
+              s=[ca.MX.sym('s%d'%i,J.sparsity_in(i)) for i in range(J.n_in())]
+              ca.forward(res,ins,[s])
+          print("B) survived nested-AD with Julia loaded", flush=True)
+          PY
+          DYLD_LIBRARY_PATH=/usr/local/lib python /tmp/B.py; echo "B) rc=$?"
+
+      - name: C) Faithful: alltests.py --run_slow with libMad
+        run: |
+          set +e
+          . /tmp/venv/bin/activate
+          export JULIA_CUDA_USE_COMPAT=false DYLD_LIBRARY_PATH=/usr/local/lib
+          cd src/test/python
+          python alltests.py --run_slow > /tmp/C.log 2>&1; echo "C) alltests rc=$? (139=SIGSEGV)"
+          grep -nE "Segmentation|signal 11|assign_cached|LinearInterpolant|test_2d_linear|Allocations:" /tmp/C.log | tail -25
