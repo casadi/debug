@@ -96,15 +96,13 @@ jobs:
           cmake --build build --target install_python || true
           find ../inst -name "_casadi*.so" -o -name "__init__.py" -path "*casadi*" | head
 
-      - name: Runtime libMad (apple-aarch64) so madnlp/Julia loads (shadow mockup)
-        run: |
-          set -eux
-          mkdir -p "$RUNNER_TEMP/libMad"
-          curl -fL -o "$RUNNER_TEMP/libMad/libMad.tar.gz" \
-            "https://github.com/apozharski/libMad/releases/download/v0.0.7-casadi/libMad-apple-aarch64-v0.0.7-casadi.tar.gz" || true
-          tar -xf "$RUNNER_TEMP/libMad/libMad.tar.gz" -C "$RUNNER_TEMP/libMad" || true
-          sudo cp -R "$RUNNER_TEMP/libMad/lib/" /usr/local/lib/ 2>/dev/null || true
-          [ -d "$RUNNER_TEMP/libMad/share" ] && sudo cp -R "$RUNNER_TEMP/libMad/share/" /usr/local/share/ 2>/dev/null || true
+      # NOTE: deliberately NOT shadowing real libMad. Embedded Julia init crashes
+      # under ASan (JIT/GC ⨯ asan), which previously aborted at MadnlpInterface::
+      # init_mem before the suite reached the interpolant. With the mockup libMad
+      # (no Julia) the suite proceeds, so ASan can actually check the interpolant /
+      # whatever corrupts. Tests whether the crash needs Julia loaded.
+      - name: (libMad shadow intentionally disabled - Julia ⨯ asan)
+        run: echo "skipping real libMad shadow; using mockup (no Julia) under ASan"
 
       - name: Fetch test data
         shell: bash -el {0}
