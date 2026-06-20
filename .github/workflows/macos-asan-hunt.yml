@@ -115,42 +115,40 @@ jobs:
           cd ../data
           for f in VanDerPol2.fmu VanDerPol3.fmu vdp.fmu cstr.fmu car_t_fmu2.fmu; do curl -fL -O "https://github.com/casadi/testbot/releases/download/perpetual/$f" || true; done
 
-      - name: Run alltests --run_slow under ASan (halt on first error)
+      - name: Run alltests --run_slow under ASan (instrumented embed launcher)
         shell: bash -el {0}
         run: |
           set +e
           PKG=$(cd src && python -c "import os;print(os.path.abspath('../inst'))")
           export PYTHONPATH="$PKG"
           export JULIA_CUDA_USE_COMPAT=false
-          export DYLD_LIBRARY_PATH="/usr/local/lib:$PKG/casadi"
-          PY=$(python -c 'import sys,os;print(os.path.realpath(sys.executable))')
-          # diagnostics (NO DYLD_INSERT here, so system tools work)
-          file "$PY" || true
-          lipo -archs "$ASAN_DYLIB" || true
-          codesign -d --verbose=2 "$PY" 2>&1 | grep -iE "flags|runtime|library-validation" || true
-          # anaconda python ships hardened runtime + library validation, so macOS
-          # IGNORES DYLD_INSERT_LIBRARIES of the unsigned asan dylib (asan then
-          # sneaks in late via the _casadi dlopen -> dead interceptors). Strip the
-          # signature to disable hardened runtime so DYLD_INSERT is honored.
-          sudo codesign --remove-signature "$PY" 2>&1 | tail -2 || true
-          codesign --remove-signature "$PY" 2>&1 | tail -2 || true
-          # The conda clang-16 asan dylib is fat x86_64,arm64 (no arm64e). Inject
-          # it ONLY into a python forced to arm64 (via arch -arm64 + env), so the
-          # arm64 slice matches and system tools (arm64e) aren't broken by a
-          # global DYLD_INSERT_LIBRARIES.
-          ASANOPTS="detect_leaks=0:detect_container_overflow=0:detect_odr_violation=0:halt_on_error=1:abort_on_error=1:symbolize=1:print_stats=0:log_path=/tmp/asan"
-          # python is plain arm64 (see `file` above) and so is the asan dylib's
-          # arm64 slice -> no `arch` needed. Set DYLD_INSERT_LIBRARIES INLINE on
-          # python only (NOT global, NOT via arch/env): the SIP-protected
-          # /usr/bin/arch|env strip DYLD_* so asan loaded late -> interceptors
-          # dead. MallocNanoZone=0 is required for asan malloc interception on macOS.
-          DYLD_INSERT_LIBRARIES="$ASAN_DYLIB" ASAN_OPTIONS="$ASANOPTS" MallocNanoZone=0 "$PY" -c "import casadi; print('casadi', casadi.__version__)"
+          export DYLD_LIBRARY_PATH="/usr/local/lib:$PKG/casadi:$CONDA_PREFIX/lib"
+          # DYLD_INSERT_LIBRARIES of the asan dylib into the (non-instrumented)
+          # conda python does NOT install asan's malloc interceptors ("loaded too
+          # late via dlopen") -- asan only arrives via the _casadi dlopen. The
+          # robust fix: make the MAIN executable asan-instrumented. A tiny C
+          # launcher that embeds python (Py_BytesMain), built with
+          # -fsanitize=address, so asan inits first with live interceptors.
+          PYCFG=$(command -v python3-config || command -v "python$(python -c 'import sys;print("%d.%d"%sys.version_info[:2])')-config")
+          echo "python3-config: $PYCFG"; "$PYCFG" --embed --cflags; "$PYCFG" --embed --ldflags
+          cat > /tmp/asan_runner.c <<'C'
+          #include <Python.h>
+          int main(int argc, char** argv){ return Py_BytesMain(argc, argv); }
+          C
+          "$CC" -fsanitize=address -fno-omit-frame-pointer -g -arch arm64 /tmp/asan_runner.c \
+            $("$PYCFG" --embed --cflags) $("$PYCFG" --embed --ldflags) \
+            -Wl,-rpath,"$CONDA_PREFIX/lib" -o /tmp/asan_runner
+          file /tmp/asan_runner
+          export PYTHONHOME="$CONDA_PREFIX"
+          export ASAN_OPTIONS="detect_leaks=0:detect_container_overflow=0:detect_odr_violation=0:halt_on_error=1:abort_on_error=1:symbolize=1:print_stats=0:log_path=/tmp/asan"
+          # sanity: interceptors must be live (no "loaded too late" warning)
+          /tmp/asan_runner -c "import casadi; print('casadi', casadi.__version__)"
           cd src/test/python
-          DYLD_INSERT_LIBRARIES="$ASAN_DYLIB" ASAN_OPTIONS="$ASANOPTS" MallocNanoZone=0 "$PY" alltests.py --run_slow 2>&1 | tee /tmp/run.log
-          echo "alltests rc=${PIPESTATUS[0]}"
-          echo "=== ASan reports ==="
+          /tmp/asan_runner alltests.py --run_slow > /tmp/run.log 2>&1
+          echo "alltests rc=$?"
+          echo "=== ASan reports (stderr is in run.log) ==="
+          grep -nE "Interceptors are not working|ERROR: AddressSanitizer|SUMMARY: AddressSanitizer|#[0-9]+ .*(casadi|interpolant)|WRITE of size|READ of size|allocated by|freed by" /tmp/run.log 2>/dev/null | head -80 || true
           for f in /tmp/asan.*; do echo "### $f"; cat "$f"; done 2>/dev/null
-          grep -nE "ERROR: AddressSanitizer|SUMMARY: AddressSanitizer|#[0-9]+ .*casadi" /tmp/asan.* 2>/dev/null | head -60 || true
 
       - name: Upload ASan + run logs
         if: always()
