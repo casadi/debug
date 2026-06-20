@@ -137,7 +137,7 @@ jobs:
           C
           "$CC" -fsanitize=address -fno-omit-frame-pointer -g -arch arm64 /tmp/asan_runner.c \
             $("$PYCFG" --embed --cflags) $("$PYCFG" --embed --ldflags) \
-            -Wl,-rpath,"$CONDA_PREFIX/lib" -o /tmp/asan_runner
+            -L"$CONDA_PREFIX/lib" -Wl,-rpath,"$CONDA_PREFIX/lib" -o /tmp/asan_runner
           file /tmp/asan_runner
           export PYTHONHOME="$CONDA_PREFIX"
           export ASAN_OPTIONS="detect_leaks=0:detect_container_overflow=0:detect_odr_violation=0:halt_on_error=1:abort_on_error=1:symbolize=1:print_stats=0:log_path=/tmp/asan"
