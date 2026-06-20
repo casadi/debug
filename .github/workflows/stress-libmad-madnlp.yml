@@ -42,9 +42,10 @@ jobs:
           . /tmp/venv/bin/activate
           pip install -q --upgrade pip
           pip install -q numpy
-          curl -fsSL -o /tmp/casadi.whl \
-            https://github.com/casadi/casadi/releases/download/nightly-release-3.8.0/casadi-3.8.0-cp311-abi3-manylinux2014_x86_64.whl
-          pip install -q /tmp/casadi.whl
+          WHL=casadi-3.8.0-cp311-abi3-manylinux2014_x86_64.whl
+          curl -fsSL -o "/tmp/$WHL" \
+            "https://github.com/casadi/casadi/releases/download/nightly-release-3.8.0/$WHL"
+          pip install -q "/tmp/$WHL"
           python -c "import casadi; print('casadi', casadi.__version__)"
 
       - name: Fetch libMad (${{ matrix.libmad }})
