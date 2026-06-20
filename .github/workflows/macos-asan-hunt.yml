@@ -140,15 +140,24 @@ jobs:
             -L"$CONDA_PREFIX/lib" -Wl,-rpath,"$CONDA_PREFIX/lib" -o /tmp/asan_runner
           file /tmp/asan_runner
           export PYTHONHOME="$CONDA_PREFIX"
-          export ASAN_OPTIONS="detect_leaks=0:detect_container_overflow=0:detect_odr_violation=0:halt_on_error=1:abort_on_error=1:symbolize=1:print_stats=0:log_path=/tmp/asan"
-          # sanity: interceptors must be live (no "loaded too late" warning)
+          # ASan ruled out OOB/UAF; the crash is a wild-pointer SEGV that Julia's
+          # handler masks. Run under lldb (intercepts SIGSEGV first) to get a
+          # SYMBOLICATED faulting frame. handle_segv=0 so asan yields the signal.
+          export ASAN_OPTIONS="detect_leaks=0:detect_container_overflow=0:detect_odr_violation=0:handle_segv=0:abort_on_error=0:symbolize=1"
           /tmp/asan_runner -c "import casadi; print('casadi', casadi.__version__)"
           cd src/test/python
-          /tmp/asan_runner alltests.py --run_slow > /tmp/run.log 2>&1
-          echo "alltests rc=$?"
-          echo "=== ASan reports (stderr is in run.log) ==="
-          grep -nE "Interceptors are not working|ERROR: AddressSanitizer|SUMMARY: AddressSanitizer|#[0-9]+ .*(casadi|interpolant)|WRITE of size|READ of size|allocated by|freed by" /tmp/run.log 2>/dev/null | head -80 || true
-          for f in /tmp/asan.*; do echo "### $f"; cat "$f"; done 2>/dev/null
+          cat > /tmp/lldb_cmds.txt <<'L'
+          run
+          thread backtrace all
+          frame select 0
+          frame variable
+          register read
+          quit
+          L
+          lldb -b -s /tmp/lldb_cmds.txt -- /tmp/asan_runner alltests.py --run_slow > /tmp/run.log 2>&1
+          echo "lldb rc=$?"
+          echo "=== faulting backtrace (casadi frames) ==="
+          grep -nE "stop reason|EXC_BAD_ACCESS|casadi|interpolant|Sparsity|nlpsol|\.cpp:|\.hpp:|frame #" /tmp/run.log 2>/dev/null | head -80 || true
 
       - name: Upload ASan + run logs
         if: always()
