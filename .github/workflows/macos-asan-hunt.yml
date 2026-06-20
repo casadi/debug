@@ -26,7 +26,8 @@ jobs:
       - name: Toolchain (Apple clang + gfortran + libomp)
         run: |
           set -eux
-          brew install gcc libomp || true
+          brew install gcc libomp swig || true
+          swig -version | head -2
           clang --version
           echo "FC=$(ls $(brew --prefix gcc)/bin/gfortran* | head -1)" >> $GITHUB_ENV
           ASAN_DYLIB=$(dirname $(xcrun -f clang))/../lib/clang/$(clang -dumpversion)/lib/darwin/libclang_rt.asan_osx_dynamic.dylib
