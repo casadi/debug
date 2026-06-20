@@ -26,8 +26,7 @@ jobs:
       - name: Toolchain (Apple clang + gfortran + libomp)
         run: |
           set -eux
-          brew install gcc libomp swig || true
-          swig -version | head -2
+          brew install gcc libomp || true
           clang --version
           echo "FC=$(ls $(brew --prefix gcc)/bin/gfortran* | head -1)" >> $GITHUB_ENV
           ASAN_DYLIB=$(dirname $(xcrun -f clang))/../lib/clang/$(clang -dumpversion)/lib/darwin/libclang_rt.asan_osx_dynamic.dylib
@@ -45,8 +44,13 @@ jobs:
         shell: bash -el {0}
         run: pip install numpy scipy pandas looseversion pyright onnx onnxruntime || pip install numpy scipy pandas looseversion
 
-      - name: Checkout casadi
-        run: git clone --depth 1 --branch "$CASADI_REF" --recurse-submodules https://github.com/casadi/casadi.git src
+      - name: Fetch casadi source zip (SWIG wrappers baked in -> SWIG_IMPORT)
+        run: |
+          set -eux
+          curl -fsSL -o /tmp/cs.zip \
+            "https://github.com/casadi/casadi/releases/download/nightly-release-3.8.0/casadi-source-v3.8.0.zip"
+          mkdir -p src && unzip -q /tmp/cs.zip -d src
+          test -f src/swig/python/target3/source/casadiPYTHON_wrap.cxx
 
       - name: mockups (Path-1, for proprietary find_package + madnlp/onnx mockups)
         uses: casadi/mockups@master
@@ -72,6 +76,7 @@ jobs:
             -DCMAKE_OSX_ARCHITECTURES=arm64 \
             -DWITH_SELFCONTAINED=ON \
             -DWITH_DEEPBIND=OFF \
+            -DSWIG_IMPORT=ON \
             -DWITH_PYTHON=ON -DWITH_PYTHON3=ON -DPython3_EXECUTABLE="$PYEXE" \
             -DCMAKE_C_FLAGS="$ASANFLAGS" -DCMAKE_CXX_FLAGS="$ASANFLAGS" \
             -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=address" \
