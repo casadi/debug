@@ -20,7 +20,7 @@ jobs:
         run: |
           set -eux
           curl -fsSL -o /tmp/lm.zip "https://github.com/casadi/polyglot/releases/download/evergreen/libMad-osx-arm64.zip"
-          mkdir -p /tmp/lm && (cd /tmp/lm && unzip -q lm.zip)
+          mkdir -p /tmp/lm && unzip -q /tmp/lm.zip -d /tmp/lm
           sudo cp -R /tmp/lm/lib/ /usr/local/lib/
           [ -d /tmp/lm/share ] && sudo cp -R /tmp/lm/share/ /usr/local/share/ || true
 
