@@ -1,0 +1,92 @@
+name: macos libMad madnlp stress (apozharski vs polyglot)
+
+# The macos-14 test-python-long SIGSEGV may be heap corruption caused by the
+# embedded-Julia of the (old) apozharski mac libMad, surfacing as a varying
+# victim (interpolant / construct_nlpsol). A new polyglot mac libMad
+# (libMad-osx-arm64.zip, self-contained Julia runtime) just landed in the
+# casadi/polyglot evergreen release. Test whether it removes the segfault.
+#
+# A/B: madnlp init+solve x10 (fresh process) with each libMad, then the full
+# alltests --run_slow with the polyglot libMad (the real CI repro).
+
+on: [workflow_dispatch]
+
+jobs:
+  stress:
+    runs-on: macos-14
+    steps:
+      - name: Install casadi nightly wheel (macos arm64) + deps
+        run: |
+          set -eux
+          python3 -m venv /tmp/venv
+          . /tmp/venv/bin/activate
+          pip install -q --upgrade pip numpy scipy
+          WHL=casadi-3.8.0-cp311-abi3-macosx_11_0_arm64.whl
+          curl -fsSL -o "/tmp/$WHL" \
+            "https://github.com/casadi/casadi/releases/download/nightly-release-3.8.0/$WHL"
+          pip install -q "/tmp/$WHL"
+          python -c "import casadi; print('casadi', casadi.__version__)"
+
+      - name: Fetch both libMads
+        run: |
+          set -eux
+          mkdir -p /tmp/apoz /tmp/poly
+          curl -fL -o /tmp/apoz/m.tar.gz \
+            "https://github.com/apozharski/libMad/releases/download/v0.0.7-casadi/libMad-apple-aarch64-v0.0.7-casadi.tar.gz"
+          tar -xf /tmp/apoz/m.tar.gz -C /tmp/apoz
+          curl -fL -o /tmp/poly/m.zip \
+            "https://github.com/casadi/polyglot/releases/download/evergreen/libMad-osx-arm64.zip"
+          (cd /tmp/poly && unzip -q m.zip)
+          echo "=== apoz lib ==="; ls /tmp/apoz/lib | head
+          echo "=== poly lib ==="; ls /tmp/poly/lib | head
+          echo "=== madnlp plugin NEEDED ==="
+          PLUG=$(find /tmp/venv -name "*nlpsol_madnlp*.dylib" -o -name "*nlpsol_madnlp*.so" | head -1)
+          echo "plugin: $PLUG"; otool -L "$PLUG" 2>/dev/null | grep -iE "mad|julia" || true
+
+      - name: madnlp solve x10 (A=apozharski, B=polyglot)
+        run: |
+          set +e
+          . /tmp/venv/bin/activate
+          export JULIA_CUDA_USE_COMPAT=false
+          cat > /tmp/m.py <<'PY'
+          import casadi as ca, numpy as np
+          x=ca.MX.sym("x",2)
+          nlp={"x":x,"f":(1-x[0])**2+100*(x[1]-x[0]**2)**2}
+          s=ca.nlpsol("s","madnlp",nlp)
+          sol=s(x0=[0.0,0.0]); print("SOLVED", float(sol["x"][0]), float(sol["x"][1]))
+          PY
+          for tag in apoz poly; do
+            DIR=/tmp/$tag
+            echo "================= libMad=$tag ================="
+            np=0; nf=0
+            for i in $(seq 1 10); do
+              DYLD_LIBRARY_PATH="$DIR/lib:$DIR/lib/julia" python /tmp/m.py > /tmp/o_$tag_$i.txt 2>&1
+              rc=$?
+              if [ $rc -eq 0 ]; then np=$((np+1)); echo "run $i: OK"; else nf=$((nf+1)); echo "run $i: FAIL rc=$rc"; tail -8 /tmp/o_$tag_$i.txt; fi
+            done
+            echo ">>> libMad=$tag PASS=$np FAIL=$nf"
+          done
+
+      - name: Full alltests --run_slow with polyglot libMad
+        run: |
+          set +e
+          . /tmp/venv/bin/activate
+          export JULIA_CUDA_USE_COMPAT=false
+          export DYLD_LIBRARY_PATH="/tmp/poly/lib:/tmp/poly/lib/julia"
+          git clone --depth 1 --branch release-3.8.0 https://github.com/casadi/casadi.git src
+          cd src/test/python
+          # test data
+          curl -fL -O https://github.com/casadi/testbot/releases/download/perpetual/serialize_3.5.5.zip && unzip -o serialize_3.5.5.zip || true
+          (cd ../data && for f in VanDerPol2.fmu VanDerPol3.fmu vdp.fmu cstr.fmu car_t_fmu2.fmu; do curl -fL -O "https://github.com/casadi/testbot/releases/download/perpetual/$f" || true; done)
+          python alltests.py --run_slow > /tmp/all.log 2>&1
+          echo "alltests rc=$? (139=SIGSEGV)"
+          echo "=== crash markers ==="
+          grep -nE "Segmentation|signal 11|assign_cached|LinearInterpolant|construct_nlpsol|init_mem|Allocations:|Ran [0-9]+ tests|FAILED|errors=" /tmp/all.log | tail -25
+
+      - name: Upload logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-libmad-logs
+          path: /tmp/all.log
+          if-no-files-found: warn
