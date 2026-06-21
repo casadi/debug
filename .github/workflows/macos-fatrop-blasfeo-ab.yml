@@ -1,0 +1,68 @@
+name: macos fatrop/blasfeo OOB A/B (unfixed vs blasfeo-oob-fix)
+
+# faulthandler pinned the macos-14 crash to ocp.OCPtests.test_fatrop ->
+# helpers.check_serialize -> casadi.call -> SIGSEGV (fatrop/blasfeo). The
+# parallel hunt found a blasfeo GENERIC lib4 kernel OOB *read* that crashes on
+# macOS (unmapped-page read) but is benign on Linux. Test whether the
+# fatrop-blasfeo-oob-fix build removes the test_fatrop crash.
+#
+# A = nightly-release-3.8.0 (unfixed blasfeo); B = nightly-fatrop-blasfeo-oob-fix.
+# Each: matching test files + polyglot mac libMad (/usr/local/lib), run ocp.py
+# (contains test_fatrop) under PYTHONFAULTHANDLER.
+
+on: [workflow_dispatch]
+
+jobs:
+  ab:
+    runs-on: macos-14
+    steps:
+      - name: Polyglot mac libMad -> /usr/local/lib (CI-faithful; no DYLD julia shadow)
+        run: |
+          set -eux
+          curl -fsSL -o /tmp/lm.zip "https://github.com/casadi/polyglot/releases/download/evergreen/libMad-osx-arm64.zip"
+          mkdir -p /tmp/lm && (cd /tmp/lm && unzip -q lm.zip)
+          sudo cp -R /tmp/lm/lib/ /usr/local/lib/
+          [ -d /tmp/lm/share ] && sudo cp -R /tmp/lm/share/ /usr/local/share/ || true
+
+      - name: A=unfixed (release-3.8.0)
+        run: |
+          set +e
+          python3 -m venv /tmp/vA && . /tmp/vA/bin/activate
+          pip install -q --upgrade pip numpy scipy pandas looseversion
+          pip install -q "https://github.com/casadi/casadi/releases/download/nightly-release-3.8.0/casadi-3.8.0-cp311-abi3-macosx_11_0_arm64.whl"
+          curl -fsSL -o /tmp/srcA.tgz "https://github.com/casadi/casadi/archive/refs/heads/release-3.8.0.tar.gz"
+          mkdir -p /tmp/srcA && tar -xzf /tmp/srcA.tgz -C /tmp/srcA --strip-components=1
+          cd /tmp/srcA/test/python
+          curl -fsSL -O https://github.com/casadi/testbot/releases/download/perpetual/serialize_3.5.5.zip && unzip -o serialize_3.5.5.zip >/dev/null || true
+          (cd ../data && for f in VanDerPol2.fmu VanDerPol3.fmu vdp.fmu cstr.fmu car_t_fmu2.fmu; do curl -fsSL -O "https://github.com/casadi/testbot/releases/download/perpetual/$f" || true; done)
+          PYTHONUNBUFFERED=1 PYTHONFAULTHANDLER=1 JULIA_CUDA_USE_COMPAT=false python -u -X faulthandler ocp.py OCPtests.test_fatrop 2>&1 | tee /tmp/A.log
+          echo ">>> A (unfixed) ocp.test_fatrop rc=${PIPESTATUS[0]} (139=SIGSEGV)"
+
+      - name: B=blasfeo-oob-fix
+        run: |
+          set +e
+          python3 -m venv /tmp/vB && . /tmp/vB/bin/activate
+          pip install -q --upgrade pip numpy scipy pandas looseversion
+          pip install -q "https://github.com/casadi/casadi/releases/download/nightly-fatrop-blasfeo-oob-fix/casadi-3.7.2.dev+fatrop.blasfeo.oob.fix-cp311-abi3-macosx_11_0_arm64.whl"
+          curl -fsSL -o /tmp/srcB.tgz "https://github.com/casadi/casadi/archive/refs/heads/fatrop-blasfeo-oob-fix.tar.gz"
+          mkdir -p /tmp/srcB && tar -xzf /tmp/srcB.tgz -C /tmp/srcB --strip-components=1
+          cd /tmp/srcB/test/python
+          curl -fsSL -O https://github.com/casadi/testbot/releases/download/perpetual/serialize_3.5.5.zip && unzip -o serialize_3.5.5.zip >/dev/null || true
+          (cd ../data && for f in VanDerPol2.fmu VanDerPol3.fmu vdp.fmu cstr.fmu car_t_fmu2.fmu; do curl -fsSL -O "https://github.com/casadi/testbot/releases/download/perpetual/$f" || true; done)
+          PYTHONUNBUFFERED=1 PYTHONFAULTHANDLER=1 JULIA_CUDA_USE_COMPAT=false python -u -X faulthandler ocp.py OCPtests.test_fatrop 2>&1 | tee /tmp/B.log
+          echo ">>> B (blasfeo-oob-fix) ocp.test_fatrop rc=${PIPESTATUS[0]} (139=SIGSEGV)"
+
+      - name: Verdict
+        if: always()
+        run: |
+          echo "=== A (unfixed) tail ==="; tail -15 /tmp/A.log 2>/dev/null
+          echo "=== B (fixed) tail ==="; tail -15 /tmp/B.log 2>/dev/null
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: fatrop-ab-logs
+          path: |
+            /tmp/A.log
+            /tmp/B.log
+          if-no-files-found: warn
