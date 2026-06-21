@@ -20,7 +20,7 @@ jobs:
           set -eux
           python3 -m venv /tmp/venv
           . /tmp/venv/bin/activate
-          pip install -q --upgrade pip numpy scipy
+          pip install -q --upgrade pip numpy scipy pandas looseversion
           WHL=casadi-3.8.0-cp311-abi3-macosx_11_0_arm64.whl
           curl -fsSL -o "/tmp/$WHL" \
             "https://github.com/casadi/casadi/releases/download/nightly-release-3.8.0/$WHL"
