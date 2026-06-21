@@ -1,0 +1,57 @@
+name: macos bug#2 Sparsity::assign_cached (blasfeo-fixed wheel)
+
+# With blasfeo guarded (test_fatrop now passes) the macos-14 full-suite SIGSEGV
+# MOVED to casadi::Sparsity::assign_cached (global Sparsity cache) during an SX
+# hessian in function.test_hessians (C backtrace: Factory::calculate_hess ->
+# Matrix<SXElem>::hessian -> jacobian -> Sparsity::dense -> assign_cached).
+# Hypothesis: stale-WeakRef UAF in the Sparsity cache, macOS-faults, Julia-loaded.
+#
+# Probe: nightly-release-3.8.0 cp311 wheel (now blasfeo-fixed) + polyglot libMad
+# in /usr/local/lib + full alltests under MallocScribble (freed mem -> 0x55) +
+# faulthandler. A 0x5555555555555555 fault address confirms UAF; faulthandler
+# names the victim test.
+
+on: [workflow_dispatch]
+
+jobs:
+  bug2:
+    runs-on: macos-14
+    steps:
+      - name: Polyglot mac libMad -> /usr/local/lib
+        run: |
+          set -eux
+          curl -fsSL -o /tmp/lm.zip "https://github.com/casadi/polyglot/releases/download/evergreen/libMad-osx-arm64.zip"
+          mkdir -p /tmp/lm && unzip -q /tmp/lm.zip -d /tmp/lm
+          sudo cp -R /tmp/lm/lib/ /usr/local/lib/
+          [ -d /tmp/lm/share ] && sudo cp -R /tmp/lm/share/ /usr/local/share/ || true
+
+      - name: venv + blasfeo-fixed nightly wheel + test files
+        run: |
+          set -eux
+          python3 -m venv /tmp/v && . /tmp/v/bin/activate
+          pip install -q --upgrade pip numpy scipy pandas looseversion
+          pip install -q "https://github.com/casadi/casadi/releases/download/nightly-release-3.8.0/casadi-3.8.0-cp311-abi3-macosx_11_0_arm64.whl"
+          curl -fsSL -o /tmp/src.tgz "https://github.com/casadi/casadi/archive/refs/heads/release-3.8.0.tar.gz"
+          mkdir -p /tmp/src && tar -xzf /tmp/src.tgz -C /tmp/src --strip-components=1
+          cd /tmp/src/test/python
+          curl -fsSL -O https://github.com/casadi/testbot/releases/download/perpetual/serialize_3.5.5.zip && unzip -o serialize_3.5.5.zip >/dev/null || true
+          (cd ../data && for f in VanDerPol2.fmu VanDerPol3.fmu vdp.fmu cstr.fmu car_t_fmu2.fmu; do curl -fsSL -O "https://github.com/casadi/testbot/releases/download/perpetual/$f" || true; done)
+
+      - name: full alltests under MallocScribble + faulthandler
+        run: |
+          set +e
+          . /tmp/v/bin/activate
+          cd /tmp/src/test/python
+          export PYTHONUNBUFFERED=1 PYTHONFAULTHANDLER=1
+          export MallocScribble=1 MallocPreScribble=1
+          unset DYLD_LIBRARY_PATH
+          ( python -u -X faulthandler alltests.py --run_slow 2>&1; echo "alltests rc=$?" ) | tee /tmp/bug2.log
+          echo "=== victim test + fault address + cache frames ==="
+          grep -nE "test_[A-Za-z0-9_]+ \(|Fatal Python error|Current thread|File \"|line [0-9]+ in|signal |0x5555|0x55|assign_cached|Sparsity|Factory|hessian|jacobian|Allocations:" /tmp/bug2.log | tail -50
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: bug2-log
+          path: /tmp/bug2.log
+          if-no-files-found: warn
