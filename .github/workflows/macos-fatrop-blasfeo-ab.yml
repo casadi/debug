@@ -35,7 +35,7 @@ jobs:
           cd /tmp/srcA/test/python
           curl -fsSL -O https://github.com/casadi/testbot/releases/download/perpetual/serialize_3.5.5.zip && unzip -o serialize_3.5.5.zip >/dev/null || true
           (cd ../data && for f in VanDerPol2.fmu VanDerPol3.fmu vdp.fmu cstr.fmu car_t_fmu2.fmu; do curl -fsSL -O "https://github.com/casadi/testbot/releases/download/perpetual/$f" || true; done)
-          PYTHONUNBUFFERED=1 PYTHONFAULTHANDLER=1 JULIA_CUDA_USE_COMPAT=false python -u -X faulthandler ocp.py OCPtests.test_fatrop 2>&1 | tee /tmp/A.log
+          PYTHONUNBUFFERED=1 PYTHONFAULTHANDLER=1 JULIA_CUDA_USE_COMPAT=false python -u -X faulthandler alltests.py --run_slow 2>&1 | tee /tmp/A.log
           echo ">>> A (unfixed) ocp.test_fatrop rc=${PIPESTATUS[0]} (139=SIGSEGV)"
 
       - name: B=blasfeo-oob-fix
@@ -49,7 +49,7 @@ jobs:
           cd /tmp/srcB/test/python
           curl -fsSL -O https://github.com/casadi/testbot/releases/download/perpetual/serialize_3.5.5.zip && unzip -o serialize_3.5.5.zip >/dev/null || true
           (cd ../data && for f in VanDerPol2.fmu VanDerPol3.fmu vdp.fmu cstr.fmu car_t_fmu2.fmu; do curl -fsSL -O "https://github.com/casadi/testbot/releases/download/perpetual/$f" || true; done)
-          PYTHONUNBUFFERED=1 PYTHONFAULTHANDLER=1 JULIA_CUDA_USE_COMPAT=false python -u -X faulthandler ocp.py OCPtests.test_fatrop 2>&1 | tee /tmp/B.log
+          PYTHONUNBUFFERED=1 PYTHONFAULTHANDLER=1 JULIA_CUDA_USE_COMPAT=false python -u -X faulthandler alltests.py --run_slow 2>&1 | tee /tmp/B.log
           echo ">>> B (blasfeo-oob-fix) ocp.test_fatrop rc=${PIPESTATUS[0]} (139=SIGSEGV)"
 
       - name: Verdict
