@@ -78,11 +78,14 @@ jobs:
           cd src/test/python
           curl -fsSL -O https://github.com/casadi/testbot/releases/download/perpetual/serialize_3.5.5.zip && unzip -o serialize_3.5.5.zip >/dev/null || true
           (cd ../data && for f in VanDerPol2.fmu VanDerPol3.fmu vdp.fmu cstr.fmu car_t_fmu2.fmu; do curl -fsSL -O "https://github.com/casadi/testbot/releases/download/perpetual/$f" || true; done)
+          export PYTHONUNBUFFERED=1
           for tag in apoz poly; do
             echo "=================== full alltests, libMad=$tag ==================="
-            DYLD_LIBRARY_PATH="/tmp/$tag/lib:/tmp/$tag/lib/julia" python alltests.py --run_slow > /tmp/all_$tag.log 2>&1
+            # -u + stdbuf: keep output on SIGSEGV (buffered stdout was lost before)
+            DYLD_LIBRARY_PATH="/tmp/$tag/lib:/tmp/$tag/lib/julia" stdbuf -oL -eL python -u alltests.py --run_slow > /tmp/all_$tag.log 2>&1
             echo ">>> libMad=$tag alltests rc=$? (139=SIGSEGV)"
-            grep -nE "Segmentation|signal 11|assign_cached|LinearInterpolant|construct_nlpsol|init_mem|Allocations:|Ran [0-9]+ tests|FAILED|errors=" /tmp/all_$tag.log | tail -12
+            echo "--- last test + crash backtrace ($tag) ---"
+            grep -nE "test_[a-zA-Z0-9_]+ \(.*\)|Segmentation|signal |Allocations:|at /|\.cpp:|\.hpp:|unknown line|assign_cached|LinearInterpolant|construct_nlpsol|init_mem" /tmp/all_$tag.log | tail -30
           done
 
       - name: Upload logs
