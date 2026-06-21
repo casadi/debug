@@ -79,12 +79,17 @@ jobs:
           curl -fsSL -O https://github.com/casadi/testbot/releases/download/perpetual/serialize_3.5.5.zip && unzip -o serialize_3.5.5.zip >/dev/null || true
           (cd ../data && for f in VanDerPol2.fmu VanDerPol3.fmu vdp.fmu cstr.fmu car_t_fmu2.fmu; do curl -fsSL -O "https://github.com/casadi/testbot/releases/download/perpetual/$f" || true; done)
           export PYTHONUNBUFFERED=1 PYTHONFAULTHANDLER=1
-          # Poly libMad (bundles libunwind -> symbolicated Julia trace). faulthandler
-          # prints the PYTHON stack (exact test + casadi call) on SIGSEGV. tee -> live.
-          export DYLD_LIBRARY_PATH="/tmp/poly/lib:/tmp/poly/lib/julia"
+          # CI-faithful libMad install: copy lib/ to /usr/local/lib so the julia/
+          # subdir stays a SUBDIR (found via libMad.dylib @rpath @loader_path/julia)
+          # and does NOT globally shadow system libgcc_s/libunwind/libgfortran.
+          # (Putting lib/julia on DYLD_LIBRARY_PATH breaks C++ exception unwinding
+          # -> spurious early SIGSEGV on the first thrown exception, helpers.py:81.)
+          sudo cp -R /tmp/poly/lib/ /usr/local/lib/
+          [ -d /tmp/poly/share ] && sudo cp -R /tmp/poly/share/ /usr/local/share/ || true
+          unset DYLD_LIBRARY_PATH
           ( python -u -X faulthandler alltests.py --run_slow 2>&1; echo "alltests rc=$?" ) | tee /tmp/all_poly.log
           echo "=== last test + python faulthandler + julia/C frames ==="
-          grep -nE "test_[A-Za-z0-9_]+ \(|Fatal Python error|Current thread|File \"|line [0-9]+, in|Segmentation|signal|Allocations:|at /|unknown line|casadi|assign_cached|LinearInterpolant|init_mem|construct_nlpsol" /tmp/all_poly.log | tail -50
+          grep -nE "test_[A-Za-z0-9_]+ \(|Fatal Python error|Current thread|File \"|line [0-9]+, in|Segmentation|signal|Allocations:|at /|unknown line|casadi|assign_cached|LinearInterpolant|init_mem|construct_nlpsol" /tmp/all_poly.log | tail -60
 
       - name: Upload logs
         if: always()
