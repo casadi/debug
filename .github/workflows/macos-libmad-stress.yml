@@ -67,26 +67,30 @@ jobs:
             echo ">>> libMad=$tag PASS=$np FAIL=$nf"
           done
 
-      - name: Full alltests --run_slow with polyglot libMad
+      - name: Full alltests --run_slow A/B (apozharski vs polyglot libMad)
         run: |
           set +e
           . /tmp/venv/bin/activate
           export JULIA_CUDA_USE_COMPAT=false
-          export DYLD_LIBRARY_PATH="/tmp/poly/lib:/tmp/poly/lib/julia"
-          git clone --depth 1 --branch release-3.8.0 https://github.com/casadi/casadi.git src
+          # source zip (git clone hit SSL cert issue on the runner); has test/
+          curl -fsSL -o /tmp/cs.zip "https://github.com/casadi/casadi/releases/download/nightly-release-3.8.0/casadi-source-v3.8.0.zip"
+          mkdir -p src && unzip -q /tmp/cs.zip -d src
           cd src/test/python
-          # test data
-          curl -fL -O https://github.com/casadi/testbot/releases/download/perpetual/serialize_3.5.5.zip && unzip -o serialize_3.5.5.zip || true
-          (cd ../data && for f in VanDerPol2.fmu VanDerPol3.fmu vdp.fmu cstr.fmu car_t_fmu2.fmu; do curl -fL -O "https://github.com/casadi/testbot/releases/download/perpetual/$f" || true; done)
-          python alltests.py --run_slow > /tmp/all.log 2>&1
-          echo "alltests rc=$? (139=SIGSEGV)"
-          echo "=== crash markers ==="
-          grep -nE "Segmentation|signal 11|assign_cached|LinearInterpolant|construct_nlpsol|init_mem|Allocations:|Ran [0-9]+ tests|FAILED|errors=" /tmp/all.log | tail -25
+          curl -fsSL -O https://github.com/casadi/testbot/releases/download/perpetual/serialize_3.5.5.zip && unzip -o serialize_3.5.5.zip >/dev/null || true
+          (cd ../data && for f in VanDerPol2.fmu VanDerPol3.fmu vdp.fmu cstr.fmu car_t_fmu2.fmu; do curl -fsSL -O "https://github.com/casadi/testbot/releases/download/perpetual/$f" || true; done)
+          for tag in apoz poly; do
+            echo "=================== full alltests, libMad=$tag ==================="
+            DYLD_LIBRARY_PATH="/tmp/$tag/lib:/tmp/$tag/lib/julia" python alltests.py --run_slow > /tmp/all_$tag.log 2>&1
+            echo ">>> libMad=$tag alltests rc=$? (139=SIGSEGV)"
+            grep -nE "Segmentation|signal 11|assign_cached|LinearInterpolant|construct_nlpsol|init_mem|Allocations:|Ran [0-9]+ tests|FAILED|errors=" /tmp/all_$tag.log | tail -12
+          done
 
       - name: Upload logs
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: macos-libmad-logs
-          path: /tmp/all.log
+          path: |
+            /tmp/all_apoz.log
+            /tmp/all_poly.log
           if-no-files-found: warn
