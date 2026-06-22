@@ -1,0 +1,66 @@
+name: macos Guard Malloc hunt (bug#2 corruptor)
+
+# bug#2: intermittent SIGSEGV in Sparsity::assign_cached (varying victim) on the
+# full macOS suite. ASan said NO heap-overflow -> uninitialized/wild-pointer or an
+# external (uninstrumented) OOB. Guard Malloc (libgmalloc) page-protects every
+# allocation, so an OOB/UAF/wild deref faults AT the corrupting access (all code,
+# incl. externals). Julia's SIGSEGV handler then prints the backtrace of THAT
+# access = the corruptor (not the eventual victim). MallocStackLogging gives the
+# faulting block's alloc/free history.
+#
+# Uses the fixed nightly wheel (all macOS fixes) + polyglot libMad. Guard Malloc
+# is slow/memory-heavy; full-suite may OOM/timeout -> if so we scope down next.
+
+on: [workflow_dispatch]
+
+jobs:
+  gmalloc:
+    runs-on: macos-14
+    timeout-minutes: 350
+    steps:
+      - name: Polyglot mac libMad -> /usr/local/lib
+        run: |
+          set -eux
+          curl -fsSL -o /tmp/lm.zip "https://github.com/casadi/polyglot/releases/download/evergreen/libMad-osx-arm64.zip"
+          mkdir -p /tmp/lm && unzip -q /tmp/lm.zip -d /tmp/lm
+          sudo cp -R /tmp/lm/lib/ /usr/local/lib/
+          [ -d /tmp/lm/share ] && sudo cp -R /tmp/lm/share/ /usr/local/share/ || true
+
+      - name: venv + fixed nightly wheel + test files
+        run: |
+          set -eux
+          python3 -m venv /tmp/v && . /tmp/v/bin/activate
+          pip install -q --upgrade pip numpy scipy pandas looseversion
+          pip install -q "https://github.com/casadi/casadi/releases/download/nightly-release-3.8.0/casadi-3.8.0-cp311-abi3-macosx_11_0_arm64.whl"
+          curl -fsSL -o /tmp/src.tgz "https://github.com/casadi/casadi/archive/refs/heads/release-3.8.0.tar.gz"
+          mkdir -p /tmp/src && tar -xzf /tmp/src.tgz -C /tmp/src --strip-components=1
+          cd /tmp/src/test/python
+          curl -fsSL -O https://github.com/casadi/testbot/releases/download/perpetual/serialize_3.5.5.zip && unzip -o serialize_3.5.5.zip >/dev/null || true
+          (cd ../data && for f in VanDerPol2.fmu VanDerPol3.fmu vdp.fmu cstr.fmu car_t_fmu2.fmu; do curl -fsSL -O "https://github.com/casadi/testbot/releases/download/perpetual/$f" || true; done)
+
+      - name: full alltests under Guard Malloc
+        run: |
+          set +e
+          . /tmp/v/bin/activate
+          cd /tmp/src/test/python
+          export PYTHONUNBUFFERED=1 PYTHONFAULTHANDLER=1
+          export DYLD_INSERT_LIBRARIES=/usr/lib/libgmalloc.dylib
+          export MallocStackLogging=1 MallocStackLoggingNoCompact=1
+          # default libgmalloc: guard page AFTER each alloc (OOB-write/read) + freed pages unmapped (UAF)
+          ( python -u -X faulthandler alltests.py --run_slow 2>&1; echo "alltests rc=$?" ) | tee /tmp/gm.log
+          echo "=== fault site (corruptor) + last test ==="
+          grep -nE "test_[A-Za-z0-9_]+ \(|GuardMalloc|signal 1[01]|Segmentation|Fatal Python|File \"|line [0-9]+ in|at /|unknown line|assign_cached|casadi|malloc_history" /tmp/gm.log | tail -50
+
+      - name: malloc_history of faulting address (if any)
+        if: always()
+        run: |
+          set +e
+          addr=$(grep -aoE "pointer being [a-z]+: 0x[0-9a-f]+|address: 0x[0-9a-f]+|0x[0-9a-f]{9,}" /tmp/gm.log | grep -oE "0x[0-9a-f]+" | head -1)
+          echo "faulting addr guess: $addr"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: gmalloc-log
+          path: /tmp/gm.log
+          if-no-files-found: warn
