@@ -33,33 +33,39 @@ jobs:
           mkdir -p /tmp/ort && tar -xzf /tmp/ort.tgz -C /tmp/ort --strip-components=1
           ls /tmp/ort/lib/libonnxruntime.so*
 
-      - name: diagnostic — real ORT + onnx detected? (must NOT skip)
+      - name: diagnostic — plugin linkage + real ORT detection (must NOT skip)
         run: |
           set +e
           . /tmp/v/bin/activate
+          PLUG=$(find /tmp/v -name "*onnx_ort*.so" | head -1); echo "plugin: $PLUG"
+          echo "--- NEEDED + RUNPATH/RPATH ---"; readelf -d "$PLUG" | grep -iE "NEEDED|PATH" | grep -iE "onnx|PATH"
+          echo "--- /tmp/ort/lib sonames ---"; ls -l /tmp/ort/lib/libonnxruntime.so*
+          export REALORT=$(ls /tmp/ort/lib/libonnxruntime.so.1.22.0)
           cd /tmp/src/test/python
-          export LD_LIBRARY_PATH=/tmp/ort/lib
-          python -c "import onnx; print('onnx', onnx.__version__)"
-          python graph_builder.py GraphBuilderNumericTests.test_double 2>&1 | tail -4
-          echo "(if 'skipped' above -> real ORT still not loaded; if 'ok' -> good)"
+          echo "=== probe with LD_PRELOAD ==="
+          LD_PRELOAD=$REALORT LD_LIBRARY_PATH=/tmp/ort/lib python graph_builder.py GraphBuilderNumericTests.test_double 2>&1 | tail -4
+          echo "(want 'ok', not 'skipped')"
 
       - name: A=valgrind graph_builder WITHOUT suppression
         run: |
           set +e
           . /tmp/v/bin/activate
           cd /tmp/src/test/python
-          export LD_LIBRARY_PATH=/tmp/ort/lib
-          valgrind --leak-check=full --error-exitcode=0 --num-callers=30 \
+          export REALORT=/tmp/ort/lib/libonnxruntime.so.1.22.0
+          LD_PRELOAD=$REALORT LD_LIBRARY_PATH=/tmp/ort/lib \
+            valgrind --leak-check=full --error-exitcode=0 --num-callers=30 \
             python graph_builder.py --ignore_memory_heavy > /tmp/A.log 2>&1
           echo "=== A (no supp) leak summary ==="; grep -aE "definitely lost|indirectly lost|ERROR SUMMARY|libonnxruntime" /tmp/A.log | grep -avE "by 0x|at 0x" | tail -6
+          echo "skipped count:"; grep -ac "skipped " /tmp/A.log
 
       - name: B=valgrind graph_builder WITH suppression
         run: |
           set +e
           . /tmp/v/bin/activate
           cd /tmp/src/test/python
-          export LD_LIBRARY_PATH=/tmp/ort/lib
-          valgrind --leak-check=full --error-exitcode=0 --num-callers=30 \
+          export REALORT=/tmp/ort/lib/libonnxruntime.so.1.22.0
+          LD_PRELOAD=$REALORT LD_LIBRARY_PATH=/tmp/ort/lib \
+            valgrind --leak-check=full --error-exitcode=0 --num-callers=30 \
             --suppressions=../internal/valgrind-casadi.supp \
             python graph_builder.py --ignore_memory_heavy > /tmp/B.log 2>&1
           echo "=== B (WITH supp) leak summary ==="; grep -aE "definitely lost|indirectly lost|ERROR SUMMARY|suppressed" /tmp/B.log | grep -avE "by 0x|at 0x" | tail -8
