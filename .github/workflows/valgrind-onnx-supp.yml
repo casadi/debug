@@ -15,15 +15,16 @@ jobs:
       - name: deps + valgrind
         run: sudo apt-get update -qq && sudo apt-get install -y -qq valgrind
 
-      - name: venv + nightly wheel + test files (release-3.8.0, has new supp)
+      - name: venv + nightly wheel + onnx + test files (immutable SHA archive, has new supp)
         run: |
           set -eux
           python3 -m venv /tmp/v && . /tmp/v/bin/activate
-          pip install -q --upgrade pip numpy scipy pandas looseversion
+          pip install -q --upgrade pip numpy scipy pandas looseversion onnx
           pip install -q "https://github.com/casadi/casadi/releases/download/nightly-release-3.8.0/casadi-3.8.0-cp311-abi3-manylinux2014_x86_64.whl"
-          curl -fsSL -o /tmp/src.tgz "https://github.com/casadi/casadi/archive/refs/heads/release-3.8.0.tar.gz"
+          # immutable SHA archive guarantees the freshly-broadened suppression
+          curl -fsSL -o /tmp/src.tgz "https://github.com/casadi/casadi/archive/9d0624fcfff598e3fce53d620ccdc979f754c0e1.tar.gz"
           mkdir -p /tmp/src && tar -xzf /tmp/src.tgz -C /tmp/src --strip-components=1
-          echo "supp head:"; grep -n "allocated within libonnxruntime" /tmp/src/test/internal/valgrind-casadi.supp
+          echo "supp present:"; grep -c "allocated within libonnxruntime" /tmp/src/test/internal/valgrind-casadi.supp
 
       - name: real ONNX Runtime 1.22.0 (shadows the shipped mockup)
         run: |
@@ -31,6 +32,16 @@ jobs:
           curl -fsSL -o /tmp/ort.tgz "https://github.com/microsoft/onnxruntime/releases/download/v1.22.0/onnxruntime-linux-x64-1.22.0.tgz"
           mkdir -p /tmp/ort && tar -xzf /tmp/ort.tgz -C /tmp/ort --strip-components=1
           ls /tmp/ort/lib/libonnxruntime.so*
+
+      - name: diagnostic — real ORT + onnx detected? (must NOT skip)
+        run: |
+          set +e
+          . /tmp/v/bin/activate
+          cd /tmp/src/test/python
+          export LD_LIBRARY_PATH=/tmp/ort/lib
+          python -c "import onnx; print('onnx', onnx.__version__)"
+          python graph_builder.py GraphBuilderNumericTests.test_double 2>&1 | tail -4
+          echo "(if 'skipped' above -> real ORT still not loaded; if 'ok' -> good)"
 
       - name: A=valgrind graph_builder WITHOUT suppression
         run: |
