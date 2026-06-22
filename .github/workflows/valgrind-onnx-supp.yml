@@ -1,0 +1,65 @@
+name: valgrind ONNX suppression check (rapid, no build)
+
+# Rapid feedback for the broadened libonnxruntime leak suppression: run
+# graph_builder.py under valgrind against the prebuilt nightly wheel + the REAL
+# ONNX Runtime (shadowed via LD_LIBRARY_PATH, like commercial_solvers), A/B
+# without vs with test/internal/valgrind-casadi.supp. Expect: NObefore shows
+# definitely-lost in libonnxruntime; WITH supp -> 0 definitely lost.
+
+on: [workflow_dispatch]
+
+jobs:
+  vg:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: deps + valgrind
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq valgrind
+
+      - name: venv + nightly wheel + test files (release-3.8.0, has new supp)
+        run: |
+          set -eux
+          python3 -m venv /tmp/v && . /tmp/v/bin/activate
+          pip install -q --upgrade pip numpy scipy pandas looseversion
+          pip install -q "https://github.com/casadi/casadi/releases/download/nightly-release-3.8.0/casadi-3.8.0-cp311-abi3-manylinux2014_x86_64.whl"
+          curl -fsSL -o /tmp/src.tgz "https://github.com/casadi/casadi/archive/refs/heads/release-3.8.0.tar.gz"
+          mkdir -p /tmp/src && tar -xzf /tmp/src.tgz -C /tmp/src --strip-components=1
+          echo "supp head:"; grep -n "allocated within libonnxruntime" /tmp/src/test/internal/valgrind-casadi.supp
+
+      - name: real ONNX Runtime 1.22.0 (shadows the shipped mockup)
+        run: |
+          set -eux
+          curl -fsSL -o /tmp/ort.tgz "https://github.com/microsoft/onnxruntime/releases/download/v1.22.0/onnxruntime-linux-x64-1.22.0.tgz"
+          mkdir -p /tmp/ort && tar -xzf /tmp/ort.tgz -C /tmp/ort --strip-components=1
+          ls /tmp/ort/lib/libonnxruntime.so*
+
+      - name: A=valgrind graph_builder WITHOUT suppression
+        run: |
+          set +e
+          . /tmp/v/bin/activate
+          cd /tmp/src/test/python
+          export LD_LIBRARY_PATH=/tmp/ort/lib
+          valgrind --leak-check=full --error-exitcode=0 --num-callers=30 \
+            python graph_builder.py --ignore_memory_heavy > /tmp/A.log 2>&1
+          echo "=== A (no supp) leak summary ==="; grep -aE "definitely lost|indirectly lost|ERROR SUMMARY|libonnxruntime" /tmp/A.log | grep -avE "by 0x|at 0x" | tail -6
+
+      - name: B=valgrind graph_builder WITH suppression
+        run: |
+          set +e
+          . /tmp/v/bin/activate
+          cd /tmp/src/test/python
+          export LD_LIBRARY_PATH=/tmp/ort/lib
+          valgrind --leak-check=full --error-exitcode=0 --num-callers=30 \
+            --suppressions=../internal/valgrind-casadi.supp \
+            python graph_builder.py --ignore_memory_heavy > /tmp/B.log 2>&1
+          echo "=== B (WITH supp) leak summary ==="; grep -aE "definitely lost|indirectly lost|ERROR SUMMARY|suppressed" /tmp/B.log | grep -avE "by 0x|at 0x" | tail -8
+          echo "=== any UNsuppressed definitely-lost with libonnxruntime? (should be none) ==="
+          grep -aB2 "definitely lost in loss record" /tmp/B.log | grep -ac "libonnxruntime" || echo "0 libonnxruntime def-lost records remain"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: vg-onnx-logs
+          path: |
+            /tmp/A.log
+            /tmp/B.log
+          if-no-files-found: warn
