@@ -1,0 +1,51 @@
+name: linux valgrind corruptor probe (bug#2 / memory-pass error_casadi)
+
+# The manylinux memory-pass flags a file via error_casadi: a valgrind ==..casadi
+# line with 0 definitely-lost -> a casadi-frame valgrind ERROR (Invalid read /
+# uninitialised / Cond), NOT a leak. That's Linux-detectable (no crash) and is
+# very likely the SAME corruptor as the macOS bug#2 assign_cached SIGSEGV (the
+# macOS crash is in MX symbolic AD: reshape->triplet->Sparsity->assign_cached).
+# Run valgrind WITH ERROR CHECKING (track-origins) on the AD-heavy suites and
+# surface casadi-frame Invalid/uninitialised reads = the corruptor.
+
+on: [workflow_dispatch]
+
+jobs:
+  vg:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: deps + valgrind
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq valgrind
+
+      - name: venv + nightly wheel + test files
+        run: |
+          set -eux
+          python3 -m venv /tmp/v && . /tmp/v/bin/activate
+          pip install -q --upgrade pip numpy scipy pandas looseversion
+          pip install -q "https://github.com/casadi/casadi/releases/download/nightly-release-3.8.0/casadi-3.8.0-cp311-abi3-manylinux2014_x86_64.whl"
+          curl -fsSL -o /tmp/src.tgz "https://github.com/casadi/casadi/archive/refs/heads/release-3.8.0.tar.gz"
+          mkdir -p /tmp/src && tar -xzf /tmp/src.tgz -C /tmp/src --strip-components=1
+
+      - name: valgrind --track-origins on AD suites
+        run: |
+          set +e
+          . /tmp/v/bin/activate
+          cd /tmp/src/test/python
+          curl -fsSL -O https://github.com/casadi/testbot/releases/download/perpetual/serialize_3.5.5.zip && unzip -o serialize_3.5.5.zip >/dev/null || true
+          for suite in function.py mx.py; do
+            echo "==================== valgrind $suite ===================="
+            valgrind --tool=memcheck --leak-check=no --track-origins=yes --num-callers=30 \
+              --error-exitcode=0 --suppressions=../internal/valgrind-casadi.supp \
+              python "$suite" --ignore_memory_heavy > /tmp/vg_$suite.log 2>&1
+            echo ">>> $suite valgrind rc=$? (SIGILL=132 means AVX hit)"
+            echo "--- casadi-frame errors (Invalid read/write / uninitialised / Cond) ---"
+            grep -nE "Invalid read|Invalid write|Use of uninitialised|Conditional jump|Source and desti" /tmp/vg_$suite.log | head -10
+            echo "--- ERROR SUMMARY ---"; grep -aE "ERROR SUMMARY" /tmp/vg_$suite.log | tail -1
+          done
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: vg-corruptor-logs
+          path: /tmp/vg_*.log
+          if-no-files-found: warn
