@@ -1,0 +1,58 @@
+name: macos bug#2 fix confidence (weakref-atomic wheel, loop x3)
+
+# The atomic-weak_ref_ fix (branch r38-weakref-atomic) made the macos-14 full
+# suite complete once (test_hessians ok, 0 crash signals). The bug was
+# intermittent, so take 3 more independent samples of the full suite with the
+# FIXED wheel + polyglot libMad (CI-faithful /usr/local/lib install), no
+# MallocScribble (so nothing is hidden), faulthandler armed.
+# PASS = "Ran N tests" + rc 0/1 (numpy baseline); FAIL = 139/134 crash.
+
+on: [workflow_dispatch]
+
+jobs:
+  fixcheck:
+    runs-on: macos-14
+    steps:
+      - name: Polyglot mac libMad -> /usr/local/lib
+        run: |
+          set -eux
+          curl -fsSL -o /tmp/lm.zip "https://github.com/casadi/polyglot/releases/download/evergreen/libMad-osx-arm64.zip"
+          mkdir -p /tmp/lm && unzip -q /tmp/lm.zip -d /tmp/lm
+          sudo cp -R /tmp/lm/lib/ /usr/local/lib/
+          [ -d /tmp/lm/share ] && sudo cp -R /tmp/lm/share/ /usr/local/share/ || true
+
+      - name: venv + FIXED wheel + test files
+        run: |
+          set -eux
+          python3 -m venv /tmp/v && . /tmp/v/bin/activate
+          pip install -q --upgrade pip numpy scipy pandas looseversion
+          pip install -q "https://github.com/casadi/casadi/releases/download/nightly-r38-weakref-atomic/casadi-3.8.0.dev+r38.weakref.atomic-cp311-abi3-macosx_11_0_arm64.whl"
+          curl -fsSL -o /tmp/src.tgz "https://github.com/casadi/casadi/archive/refs/heads/r38-weakref-atomic.tar.gz"
+          mkdir -p /tmp/src && tar -xzf /tmp/src.tgz -C /tmp/src --strip-components=1
+          cd /tmp/src/test/python
+          curl -fsSL -O https://github.com/casadi/testbot/releases/download/perpetual/serialize_3.5.5.zip && unzip -o serialize_3.5.5.zip >/dev/null || true
+          (cd ../data && for f in VanDerPol2.fmu VanDerPol3.fmu vdp.fmu cstr.fmu car_t_fmu2.fmu; do curl -fsSL -O "https://github.com/casadi/testbot/releases/download/perpetual/$f" || true; done)
+
+      - name: full alltests --run_slow x3 (fixed wheel + Julia)
+        run: |
+          set +e
+          . /tmp/v/bin/activate
+          cd /tmp/src/test/python
+          export PYTHONUNBUFFERED=1 PYTHONFAULTHANDLER=1
+          unset DYLD_LIBRARY_PATH
+          for i in 1 2 3; do
+            echo "==================== sample $i ===================="
+            python -u -X faulthandler alltests.py --run_slow > /tmp/s$i.log 2>&1
+            rc=$?
+            tail -1 /tmp/s$i.log | grep -q "Ran" && ran=$(grep -aE "Ran [0-9]+ tests" /tmp/s$i.log | tail -1) || ran="(no summary)"
+            crash=$(grep -acE "signal 11|signal 6|Segmentation fault|Abort trap" /tmp/s$i.log)
+            echo ">>> sample $i rc=$rc crash_signals=$crash | $ran"
+          done
+          echo "=== verdict: rc 0/1 + crash_signals=0 on all 3 => fix holds ==="
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: bug2-fixcheck-logs
+          path: /tmp/s*.log
+          if-no-files-found: warn
