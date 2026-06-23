@@ -45,8 +45,10 @@ jobs:
           cd /tmp/src/test/python
           export PYTHONUNBUFFERED=1 PYTHONFAULTHANDLER=1
           export DYLD_INSERT_LIBRARIES=/usr/lib/libgmalloc.dylib
-          export MallocStackLogging=1 MallocStackLoggingNoCompact=1
-          # default libgmalloc: guard page AFTER each alloc (OOB-write/read) + freed pages unmapped (UAF)
+          # NO MallocStackLogging: it stores a stack per allocation -> unbounded RAM -> OOM
+          # (the prior full run died ~1h). The fault backtrace (Julia/libunwind) at the
+          # corrupting access is the goal; we trade away the freed-block alloc/free history.
+          # default libgmalloc: guard page AFTER each alloc (OOB-write/read) + freed pages PROT_NONE (UAF)
           ( python -u -X faulthandler alltests.py --run_slow 2>&1; echo "alltests rc=$?" ) | tee /tmp/gm.log
           echo "=== fault site (corruptor) + last test ==="
           grep -nE "test_[A-Za-z0-9_]+ \(|GuardMalloc|signal 1[01]|Segmentation|Fatal Python|File \"|line [0-9]+ in|at /|unknown line|assign_cached|casadi|malloc_history" /tmp/gm.log | tail -50
