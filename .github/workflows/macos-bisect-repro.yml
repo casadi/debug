@@ -99,7 +99,8 @@ jobs:
       - name: libomp (OpenMP) for the wheel
         run: brew install libomp || true
 
-      - name: Download REAL ONNX Runtime (macos arm64) to shadow the mockup (public, no token)
+      - name: Download REAL ONNX Runtime (only when NOT using commercial_solvers)
+        if: ${{ env.HAVE_COMM != 'true' }}
         run: |
           set -eux
           curl -fL -o "$RUNNER_TEMP/ort.tgz" https://github.com/microsoft/onnxruntime/releases/download/v1.22.0/onnxruntime-osx-arm64-1.22.0.tgz
@@ -154,12 +155,14 @@ jobs:
           PYTHONFAULTHANDLER: "1"
         run: |
           set +e
-          # The polyglot libMad self-loads Julia via its own rpath; setting
-          # DYLD_LIBRARY_PATH breaks that (it overrides rpath -> warmup fails). The
-          # working recipe relies on /usr/local/lib being a default dyld fallback, so
-          # UNSET DYLD. (Trade-off: real-ORT shadowing needs DYLD, so ORT stays mockup
-          # here; this run isolates the polyglot-libMad/Julia[bundled libgomp] trigger.)
-          unset DYLD_LIBRARY_PATH
+          if [ "$HAVE_COMM" = "true" ]; then
+            # commercial_solvers already wired DYLD/env via $GITHUB_ENV (real libMad +
+            # ORT + clarabel etc.) -- preserve it, just add libomp for the wheel.
+            export DYLD_LIBRARY_PATH="$(brew --prefix libomp)/lib:${DYLD_LIBRARY_PATH:-}"
+          else
+            # fallback polyglot libMad: rely on /usr/local/lib default; don't override rpath
+            unset DYLD_LIBRARY_PATH
+          fi
           if [ -n "$CASADI_PKG" ]; then export PYTHONPATH="$CASADI_PKG"; fi
           cd src/test/python
           # Mirror test-python-long: load all real plugins first (commercial_solvers env)
