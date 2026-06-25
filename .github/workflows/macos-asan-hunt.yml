@@ -138,28 +138,24 @@ jobs:
             -L"$CONDA_PREFIX/lib" -Wl,-rpath,"$CONDA_PREFIX/lib" -o /tmp/asan_runner
           file /tmp/asan_runner
           export PYTHONHOME="$CONDA_PREFIX"
-          # Live lldb can't drive our python-embedding launcher: lldb embeds
-          # python 3.9 which clashes with the launcher's libpython 3.12. Instead
-          # let it crash and analyze the CORE post-mortem (no live python in
-          # lldb). Julia's handler prints then re-raises -> with cores enabled we
-          # get a core. handle_segv=0 (let Julia/OS), disable_coredump=0 (asan
-          # nukes RLIMIT_CORE otherwise).
-          export ASAN_OPTIONS="detect_leaks=0:detect_container_overflow=0:detect_odr_violation=0:handle_segv=0:abort_on_error=0:disable_coredump=0:symbolize=1"
-          ulimit -c unlimited; ulimit -c
-          sudo mkdir -p /cores && sudo chmod 1777 /cores || true
+          # Decisive change vs the prior (inconclusive) run: catch the corrupting
+          # WRITE *synchronously* at its source instead of post-mortem on a core.
+          #  - quarantine_size_mb / max_redzone HUGE: keep freed blocks poisoned so a
+          #    use-after-free WRITE (the suspected corruptor of the Sparsity cache
+          #    map) hits poisoned memory -> ASan reports alloc+free+write stacks.
+          #    The prior run used the DEFAULT quarantine -> freed block recycled ->
+          #    write landed on valid memory -> no report.
+          #  - handle_segv=1 + allow_user_segv_handler=0: ASan's handler WINS over
+          #    Julia's (so a hard SEGV is still ASan-reported, not masked).
+          #  - halt_on_error=1:abort_on_error=1: stop at the first finding.
+          export ASAN_OPTIONS="detect_leaks=0:detect_container_overflow=0:detect_odr_violation=0:quarantine_size_mb=2048:max_redzone=2048:malloc_context_size=30:halt_on_error=1:abort_on_error=1:handle_segv=1:allow_user_segv_handler=0:detect_stack_use_after_return=1:symbolize=1"
           /tmp/asan_runner -c "import casadi; print('casadi', casadi.__version__)"
           cd src/test/python
           /tmp/asan_runner alltests.py --run_slow > /tmp/run.log 2>&1
           echo "asan_runner rc=$?"
-          echo "=== cores ==="; ls -la /cores/ 2>/dev/null
-          CORE=$(ls -t /cores/core.* 2>/dev/null | head -1)
-          if [ -n "$CORE" ]; then
-            echo "=== lldb post-mortem on $CORE ==="
-            lldb -b -o "bt all" -o "quit" /tmp/asan_runner -c "$CORE" > /tmp/bt.log 2>&1
-            grep -nE "frame #|casadi|interpolant|Sparsity|nlpsol|\.cpp:|\.hpp:|stop reason|EXC_BAD" /tmp/bt.log | head -80
-          else
-            echo "NO CORE produced; tail of run.log:"; tail -40 /tmp/run.log
-          fi
+          echo "=== AddressSanitizer findings (write/free/alloc stacks) ==="
+          grep -nE "AddressSanitizer|heap-use-after-free|heap-buffer-overflow|WRITE of size|READ of size|freed by thread|previously allocated|#[0-9]+ 0x|casadi|\.cpp:|\.hpp:|SUMMARY" /tmp/run.log | head -120
+          echo "=== tail of run.log ==="; tail -30 /tmp/run.log
 
       - name: Upload ASan + run logs
         if: always()
