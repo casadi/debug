@@ -87,16 +87,14 @@ jobs:
           JGILLIS_RESTRICTED: ${{ secrets.JGILLIS_RESTRICTED != '' }}
         if: ${{ env.HAVE_COMM == 'true' }}
 
-      - name: Fallback libMad (apple-aarch64) ONLY when no commercial_solvers token
+      - name: POLYGLOT libMad (the one commercial_solvers actually uses) -> /usr/local/lib
         if: ${{ env.HAVE_COMM != 'true' }}
         run: |
           set -eux
-          mkdir -p "$RUNNER_TEMP/libMad"
-          curl -fL -o "$RUNNER_TEMP/libMad/libMad.tar.gz" \
-            "https://github.com/apozharski/libMad/releases/download/v0.0.7-casadi/libMad-apple-aarch64-v0.0.7-casadi.tar.gz"
-          tar -xf "$RUNNER_TEMP/libMad/libMad.tar.gz" -C "$RUNNER_TEMP/libMad"
-          sudo cp -R "$RUNNER_TEMP/libMad/lib/" /usr/local/lib/ || true
-          [ -d "$RUNNER_TEMP/libMad/share" ] && sudo cp -R "$RUNNER_TEMP/libMad/share/" /usr/local/share/ || true
+          curl -fsSL -o /tmp/lm.zip "https://github.com/casadi/polyglot/releases/download/evergreen/libMad-osx-arm64.zip"
+          mkdir -p /tmp/lm && unzip -q /tmp/lm.zip -d /tmp/lm
+          sudo cp -R /tmp/lm/lib/ /usr/local/lib/
+          [ -d /tmp/lm/share ] && sudo cp -R /tmp/lm/share/ /usr/local/share/ || true
 
       - name: libomp (OpenMP) for the wheel
         run: brew install libomp || true
