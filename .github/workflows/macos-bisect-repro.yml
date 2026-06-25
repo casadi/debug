@@ -101,6 +101,18 @@ jobs:
       - name: libomp (OpenMP) for the wheel
         run: brew install libomp || true
 
+      - name: Download REAL ONNX Runtime (macos arm64) to shadow the mockup (public, no token)
+        run: |
+          set -eux
+          curl -fL -o "$RUNNER_TEMP/ort.tgz" https://github.com/microsoft/onnxruntime/releases/download/v1.22.0/onnxruntime-osx-arm64-1.22.0.tgz
+          tar -xzf "$RUNNER_TEMP/ort.tgz" -C "$RUNNER_TEMP"
+          ls -l "$RUNNER_TEMP/onnxruntime-osx-arm64-1.22.0/lib"/libonnxruntime* || true
+          echo "ORT_LIB=$RUNNER_TEMP/onnxruntime-osx-arm64-1.22.0/lib" >> $GITHUB_ENV
+
+      - name: pip onnx (enables the real-ORT runtime gate)
+        shell: bash -el {0}
+        run: pip install -q onnx
+
       - name: Fetch test data
         shell: bash -el {0}
         run: |
@@ -144,7 +156,7 @@ jobs:
           PYTHONFAULTHANDLER: "1"
         run: |
           set +e
-          export DYLD_LIBRARY_PATH="/usr/local/lib:$(brew --prefix libomp)/lib:$DYLD_LIBRARY_PATH"
+          export DYLD_LIBRARY_PATH="${ORT_LIB:-}:/usr/local/lib:$(brew --prefix libomp)/lib:$DYLD_LIBRARY_PATH"
           if [ -n "$CASADI_PKG" ]; then export PYTHONPATH="$CASADI_PKG"; fi
           cd src/test/python
           # Mirror test-python-long: load all real plugins first (commercial_solvers env)
