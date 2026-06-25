@@ -74,7 +74,19 @@ jobs:
             echo "CASADI_PKG=" >> $GITHUB_ENV
           fi
 
-      - name: Fetch + install libMad (apple-aarch64) to load Julia
+      - name: Report whether the commercial_solvers token is available
+        run: echo "JGILLIS_RESTRICTED_SET=${{ secrets.JGILLIS_RESTRICTED != '' }}"
+
+      - name: commercial_solvers (real ORT/clarabel/madnlp -- the test-python-long env)
+        uses: casadi/commercial_solvers@master
+        with:
+          token: ${{ secrets.JGILLIS_RESTRICTED }}
+        env:
+          JGILLIS_RESTRICTED: ${{ secrets.JGILLIS_RESTRICTED != '' }}
+        if: ${{ secrets.JGILLIS_RESTRICTED != '' }}
+
+      - name: Fallback libMad (apple-aarch64) ONLY when no commercial_solvers token
+        if: ${{ secrets.JGILLIS_RESTRICTED == '' }}
         run: |
           set -eux
           mkdir -p "$RUNNER_TEMP/libMad"
@@ -133,6 +145,8 @@ jobs:
           export DYLD_LIBRARY_PATH="/usr/local/lib:$(brew --prefix libomp)/lib:$DYLD_LIBRARY_PATH"
           if [ -n "$CASADI_PKG" ]; then export PYTHONPATH="$CASADI_PKG"; fi
           cd src/test/python
+          # Mirror test-python-long: load all real plugins first (commercial_solvers env)
+          python -c "from casadi.tools import *; loadAllCompiledPlugins()" || echo "loadAllCompiledPlugins rc=$?"
           if [ -z "$CASADI_BISECT_MODULES" ]; then
             # Faithful full-suite (Julia loads naturally during nlp.py; no warmup
             # perturbation) -- isolates whether the custom runner was suppressing the bug.
