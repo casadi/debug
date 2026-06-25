@@ -27,13 +27,8 @@ jobs:
     steps:
       - id: g
         run: |
-          python3 - <<'PY' >> $GITHUB_OUTPUT
-import json,os
-n=int(os.environ.get("REPS","6") or "6")
-print("reps="+json.dumps(list(range(1,n+1))))
-PY
-        env:
-          REPS: ${{ github.event.inputs.reps }}
+          N="${{ github.event.inputs.reps }}"; N="${N:-6}"
+          echo "reps=[$(seq -s, 1 "$N")]" >> $GITHUB_OUTPUT
 
   repro:
     needs: setup-matrix
