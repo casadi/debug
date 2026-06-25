@@ -164,12 +164,14 @@ jobs:
             unset DYLD_LIBRARY_PATH
           fi
           if [ -n "$CASADI_PKG" ]; then export PYTHONPATH="$CASADI_PKG"; fi
+          # Enable core dumps so we can post-mortem the SIGABRT that Julia's handler masks.
+          sudo mkdir -p /cores && sudo chmod 1777 /cores || true
+          ulimit -c unlimited; ulimit -c
           cd src/test/python
           # Mirror test-python-long: load all real plugins first (commercial_solvers env)
           python -c "from casadi.tools import *; loadAllCompiledPlugins()" || echo "loadAllCompiledPlugins rc=$?"
+          PYEXE=$(python -c 'import sys;print(sys.executable)')
           if [ -z "$CASADI_BISECT_MODULES" ]; then
-            # Faithful full-suite (Julia loads naturally during nlp.py; no warmup
-            # perturbation) -- isolates whether the custom runner was suppressing the bug.
             python -u alltests.py --run_slow
           else
             python -u bisect_run.py
@@ -177,4 +179,15 @@ jobs:
           rc=$?
           echo "BISECT_RC=$rc (rep ${{ matrix.rep }})"
           if [ "$rc" = "139" ] || [ "$rc" = "134" ]; then echo "CRASH_DETECTED rc=$rc"; fi
+          # Post-mortem the core (if any) to UNMASK Julia: classify malloc-corruption
+          # (heap UAF/double-free) vs libc++abi-terminate (exception/unwind flavour) and
+          # show the real casadi frames at the abort.
+          CORE=$(ls -t /cores/core.* 2>/dev/null | head -1)
+          if [ -n "$CORE" ]; then
+            echo "=== CORE POST-MORTEM ($CORE) ==="
+            lldb -b -o "bt all" -o "quit" "$PYEXE" -c "$CORE" 2>&1 \
+              | grep -iE "stop reason|frame #|casadi|malloc|free|terminat|__cxa|abort|Sparsity|SXNode|GenericShared|_Unwind|EXC_" | head -80
+          else
+            echo "NO CORE produced"
+          fi
           exit 0
