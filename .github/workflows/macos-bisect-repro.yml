@@ -154,7 +154,12 @@ jobs:
           PYTHONFAULTHANDLER: "1"
         run: |
           set +e
-          export DYLD_LIBRARY_PATH="${ORT_LIB:-}:/usr/local/lib:$(brew --prefix libomp)/lib:$DYLD_LIBRARY_PATH"
+          # The polyglot libMad self-loads Julia via its own rpath; setting
+          # DYLD_LIBRARY_PATH breaks that (it overrides rpath -> warmup fails). The
+          # working recipe relies on /usr/local/lib being a default dyld fallback, so
+          # UNSET DYLD. (Trade-off: real-ORT shadowing needs DYLD, so ORT stays mockup
+          # here; this run isolates the polyglot-libMad/Julia[bundled libgomp] trigger.)
+          unset DYLD_LIBRARY_PATH
           if [ -n "$CASADI_PKG" ]; then export PYTHONPATH="$CASADI_PKG"; fi
           cd src/test/python
           # Mirror test-python-long: load all real plugins first (commercial_solvers env)
