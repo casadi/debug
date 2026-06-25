@@ -18,6 +18,9 @@ on:
       fixed_run:
         description: "casadi/casadi run id to pull the FIXED casadi-osx-arm64-py311 artifact from (empty = use nightly wheel)"
         default: ""
+      no_julia:
+        description: "set to 'yes' to remove the madnlp plugin so libMad/Julia never loads (necessity test)"
+        default: ""
 
 jobs:
   setup-matrix:
@@ -152,9 +155,16 @@ jobs:
         shell: bash -el {0}
         env:
           CASADI_BISECT_MODULES: ${{ github.event.inputs.modules }}
+          NO_JULIA: ${{ github.event.inputs.no_julia }}
           PYTHONFAULTHANDLER: "1"
         run: |
           set +e
+          if [ -n "$NO_JULIA" ]; then
+            # Necessity test: remove the madnlp plugin so libMad/Julia is never loaded,
+            # while keeping the rest of the commercial env (ORT/clarabel/TBB).
+            CASDIR=$(python -c "import casadi,os;print(os.path.dirname(casadi.__file__))")
+            ls "$CASDIR"/libcasadi_nlpsol_madnlp.* 2>/dev/null && rm -f "$CASDIR"/libcasadi_nlpsol_madnlp.* && echo "REMOVED madnlp plugin (no-Julia run)"
+          fi
           if [ "$HAVE_COMM" = "true" ]; then
             # commercial_solvers already wired DYLD/env via $GITHUB_ENV (real libMad +
             # ORT + clarabel etc.) -- preserve it, just add libomp for the wheel.
