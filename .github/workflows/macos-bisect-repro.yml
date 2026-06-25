@@ -1,0 +1,145 @@
+name: macos bug2 bisect/repro (no-compile, nightly wheel or run-artifact)
+
+# Reproduce + bisect the intermittent macOS Sparsity-cache heap corruption with NO
+# compilation: install a prebuilt wheel (nightly-release-3.8.0, or the fixed build's
+# artifact from a casadi/casadi run), load Julia/libMad (madnlp warmup), then run a
+# CONFIGURABLE subset of test modules x N parallel reps. Bisect by re-dispatching with
+# different `modules`. Crash = rc 139 (SIGSEGV) / 134 (SIGABRT).
+
+on:
+  workflow_dispatch:
+    inputs:
+      modules:
+        description: "comma-separated test modules to run (empty = full default set)"
+        default: ""
+      reps:
+        description: "parallel reps"
+        default: "6"
+      fixed_run:
+        description: "casadi/casadi run id to pull the FIXED casadi-osx-arm64-py311 artifact from (empty = use nightly wheel)"
+        default: ""
+
+jobs:
+  setup-matrix:
+    runs-on: ubuntu-latest
+    outputs:
+      reps: ${{ steps.g.outputs.reps }}
+    steps:
+      - id: g
+        run: |
+          python3 - <<'PY' >> $GITHUB_OUTPUT
+import json,os
+n=int(os.environ.get("REPS","6") or "6")
+print("reps="+json.dumps(list(range(1,n+1))))
+PY
+        env:
+          REPS: ${{ github.event.inputs.reps }}
+
+  repro:
+    needs: setup-matrix
+    runs-on: macos-14
+    strategy:
+      fail-fast: false
+      matrix:
+        rep: ${{ fromJson(needs.setup-matrix.outputs.reps) }}
+    steps:
+      - name: Checkout casadi release-3.8.0 (for test files + the subset runner)
+        run: |
+          set -eux
+          curl -fsSL -o /tmp/cs.zip "https://github.com/casadi/casadi/releases/download/nightly-release-3.8.0/casadi-source-v3.8.0.zip"
+          mkdir -p src && unzip -q /tmp/cs.zip -d src
+          ls src/test/python/alltests.py
+
+      - uses: conda-incubator/setup-miniconda@v3
+        with:
+          python-version: "3.11"
+          activate-environment: test
+          auto-update-conda: true
+
+      - name: Python deps
+        shell: bash -el {0}
+        run: pip install -q --upgrade pip numpy scipy pandas looseversion pyright
+
+      - name: Install casadi -- FIXED artifact if fixed_run set, else nightly wheel
+        shell: bash -el {0}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          FIXED_RUN: ${{ github.event.inputs.fixed_run }}
+        run: |
+          set -eux
+          if [ -n "$FIXED_RUN" ]; then
+            # FIXED build: download the package-zip artifact from the casadi/casadi run
+            gh run download "$FIXED_RUN" --repo casadi/casadi -n casadi-osx-arm64-py311 -D /tmp/fix
+            unzip -q /tmp/fix/casadi-osx-arm64-py311.zip -d /tmp/fixpkg
+            echo "CASADI_PKG=$(python -c "import os;print(os.path.abspath('/tmp/fixpkg'))")" >> $GITHUB_ENV
+          else
+            WHL=casadi-3.8.0-cp311-abi3-macosx_11_0_arm64.whl
+            curl -fsSL -o "/tmp/$WHL" "https://github.com/casadi/casadi/releases/download/nightly-release-3.8.0/$WHL"
+            pip install -q "/tmp/$WHL"
+            echo "CASADI_PKG=" >> $GITHUB_ENV
+          fi
+
+      - name: Fetch + install libMad (apple-aarch64) to load Julia
+        run: |
+          set -eux
+          mkdir -p "$RUNNER_TEMP/libMad"
+          curl -fL -o "$RUNNER_TEMP/libMad/libMad.tar.gz" \
+            "https://github.com/apozharski/libMad/releases/download/v0.0.7-casadi/libMad-apple-aarch64-v0.0.7-casadi.tar.gz"
+          tar -xf "$RUNNER_TEMP/libMad/libMad.tar.gz" -C "$RUNNER_TEMP/libMad"
+          sudo cp -R "$RUNNER_TEMP/libMad/lib/" /usr/local/lib/ || true
+          [ -d "$RUNNER_TEMP/libMad/share" ] && sudo cp -R "$RUNNER_TEMP/libMad/share/" /usr/local/share/ || true
+
+      - name: libomp (OpenMP) for the wheel
+        run: brew install libomp || true
+
+      - name: Fetch test data
+        shell: bash -el {0}
+        run: |
+          set -eux
+          cd src/test/python
+          curl -fL -O https://github.com/casadi/testbot/releases/download/perpetual/serialize_3.5.5.zip && unzip -o serialize_3.5.5.zip || true
+          cd ../data
+          for f in VanDerPol2.fmu VanDerPol3.fmu vdp.fmu cstr.fmu car_t_fmu2.fmu; do curl -fL -O "https://github.com/casadi/testbot/releases/download/perpetual/$f" || true; done
+
+      - name: Write the subset runner
+        run: |
+          cat > src/test/python/bisect_run.py <<'PY'
+          import os, sys
+          sys.argv = ['bisect', '--run_slow']   # helpers.py argparse reads this at import
+          import unittest, importlib
+          DEFAULT = ["mx","sx","typemaps","integration","ocp","nlp","implicitfunction","ad",
+                     "sparsity","linearsolver","matrix","conic","misc","function","tools",
+                     "simulator","vectortools","optistack","feasiblesqpmethod","serialize",
+                     "threads","daebuilder","graph_builder","pyright_stubs"]
+          mods = [m for m in os.environ.get("CASADI_BISECT_MODULES","").split(",") if m] or DEFAULT
+          import casadi as ca
+          try:
+              x = ca.MX.sym('x', 2)
+              nlp = {'x': x, 'f': ca.sumsqr(x - 1)}
+              ca.nlpsol('s', 'madnlp', nlp)(x0=[0.2, 0.3])
+              print("JULIA_WARMUP_OK", flush=True)
+          except Exception as e:
+              print("JULIA_WARMUP_FAIL", repr(e), flush=True)
+          print("BISECT_MODULES", mods, flush=True)
+          loader = unittest.TestLoader(); suite = unittest.TestSuite()
+          for m in mods:
+              suite.addTests(loader.loadTestsFromModule(importlib.import_module(m)))
+          res = unittest.TextTestRunner(verbosity=1).run(suite)
+          sys.exit(0 if res.wasSuccessful() else 1)
+          PY
+
+      - name: Run subset (rep ${{ matrix.rep }})
+        shell: bash -el {0}
+        env:
+          CASADI_BISECT_MODULES: ${{ github.event.inputs.modules }}
+          PYTHONFAULTHANDLER: "1"
+        run: |
+          set +e
+          export DYLD_LIBRARY_PATH="/usr/local/lib:$(brew --prefix libomp)/lib:$DYLD_LIBRARY_PATH"
+          if [ -n "$CASADI_PKG" ]; then export PYTHONPATH="$CASADI_PKG"; fi
+          cd src/test/python
+          python -u bisect_run.py
+          rc=$?
+          echo "BISECT_RC=$rc (rep ${{ matrix.rep }})"
+          if [ "$rc" = "139" ] || [ "$rc" = "134" ]; then echo "CRASH_DETECTED rc=$rc"; fi
+          exit 0
