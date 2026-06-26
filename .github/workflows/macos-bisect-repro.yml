@@ -27,6 +27,9 @@ on:
       clear_usrlocal:
         description: "set to 'yes' to remove ALL /usr/local/lib libs except libMad (test the commercial dep-lib shadow)"
         default: ""
+      rm_usrlocal:
+        description: "glob (e.g. 'libomp.dylib') to remove ONLY from /usr/local/lib (NOT the wheel) -- pinpoint the conflicting dep lib"
+        default: ""
 
 jobs:
   setup-matrix:
@@ -164,6 +167,7 @@ jobs:
           NO_JULIA: ${{ github.event.inputs.no_julia }}
           RM_GLOB: ${{ github.event.inputs.rm_glob }}
           CLEAR_USRLOCAL: ${{ github.event.inputs.clear_usrlocal }}
+          RM_USRLOCAL: ${{ github.event.inputs.rm_usrlocal }}
           PYTHONFAULTHANDLER: "1"
         run: |
           set +e
@@ -171,6 +175,10 @@ jobs:
           if [ -n "$CLEAR_USRLOCAL" ]; then
             echo "Clearing /usr/local/lib except libMad/julia:"
             sudo find /usr/local/lib -maxdepth 1 -type f ! -iname "*mad*" -print -delete 2>/dev/null
+          fi
+          if [ -n "$RM_USRLOCAL" ]; then
+            echo "Removing ONLY from /usr/local/lib: $RM_USRLOCAL"
+            for g in $RM_USRLOCAL; do sudo find /usr/local/lib -maxdepth 1 -iname "$g" -print -delete 2>/dev/null; done
           fi
           if [ -n "$RM_GLOB" ]; then
             # Component bisection: remove real commercial solver libs (space-separated
