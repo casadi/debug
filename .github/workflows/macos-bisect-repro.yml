@@ -30,6 +30,9 @@ on:
       rm_usrlocal:
         description: "glob (e.g. 'libomp.dylib') to remove ONLY from /usr/local/lib (NOT the wheel) -- pinpoint the conflicting dep lib"
         default: ""
+      diag:
+        description: "set to 'yes' to otool -L the xpress libs + wheel libs (mechanism probe) then EXIT before the test suite"
+        default: ""
 
 jobs:
   setup-matrix:
@@ -168,10 +171,25 @@ jobs:
           RM_GLOB: ${{ github.event.inputs.rm_glob }}
           CLEAR_USRLOCAL: ${{ github.event.inputs.clear_usrlocal }}
           RM_USRLOCAL: ${{ github.event.inputs.rm_usrlocal }}
+          DIAG: ${{ github.event.inputs.diag }}
           PYTHONFAULTHANDLER: "1"
         run: |
           set +e
           echo "=== /usr/local/lib contents (commercial_solvers additions) ==="; ls -la /usr/local/lib 2>/dev/null | head -60
+          if [ -n "$DIAG" ]; then
+            CASDIR=$(python -c "import casadi,os;print(os.path.dirname(casadi.__file__))")
+            echo "===== MECHANISM PROBE: otool -L of xpress libs ====="
+            for L in /usr/local/lib/libxprl.dylib /usr/local/lib/libxprm_rt.dylib /usr/local/lib/libxprm_mc.dylib /usr/local/lib/libxprb_J.dylib /usr/local/lib/libxpnll.dylib /usr/local/lib/libjavaxprs.dylib; do
+              [ -e "$L" ] && { echo "--- $L ---"; otool -L "$L"; echo "--- RPATHs ---"; otool -l "$L" | grep -A2 LC_RPATH | grep path; }
+            done
+            echo "===== xpress libs: which Fortran/OpenMP/quadmath/stdc++/tbb do they pull? ====="
+            for L in /usr/local/lib/libxpr*.dylib /usr/local/lib/libxpnll.dylib; do [ -e "$L" ] && otool -L "$L"; done 2>/dev/null | grep -iE "gfortran|gomp|libomp|iomp|quadmath|libstdc|libc\+\+|tbb|gcc_s" | sort | uniq -c
+            echo "===== wheel libs (libcasadi/libipopt/libmumps) Fortran/OpenMP linkage for comparison ====="
+            find "$CASDIR" -name "libcasadi*.dylib" -o -name "*ipopt*.dylib" -o -name "*mumps*" -o -name "libgfortran*" -o -name "libgomp*" -o -name "libquadmath*" 2>/dev/null | head -40
+            echo "===== wheel bundled gfortran/omp/quadmath present? ====="
+            find "$CASDIR" /usr/local/lib -maxdepth 3 \( -name "libgfortran*" -o -name "libgomp*" -o -name "libquadmath*" -o -name "libgcc_s*" \) -print 2>/dev/null
+            echo "DIAG DONE -- exiting before test suite"; exit 0
+          fi
           if [ -n "$CLEAR_USRLOCAL" ]; then
             echo "Clearing /usr/local/lib except libMad/julia:"
             sudo find /usr/local/lib -maxdepth 1 -type f ! -iname "*mad*" -print -delete 2>/dev/null
