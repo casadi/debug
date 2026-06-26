@@ -24,6 +24,9 @@ on:
       rm_glob:
         description: "glob (e.g. '*mosek*') of solver libs to rm from /usr/local/lib + casadi pkg dir before running (component bisection)"
         default: ""
+      clear_usrlocal:
+        description: "set to 'yes' to remove ALL /usr/local/lib libs except libMad (test the commercial dep-lib shadow)"
+        default: ""
 
 jobs:
   setup-matrix:
@@ -160,9 +163,15 @@ jobs:
           CASADI_BISECT_MODULES: ${{ github.event.inputs.modules }}
           NO_JULIA: ${{ github.event.inputs.no_julia }}
           RM_GLOB: ${{ github.event.inputs.rm_glob }}
+          CLEAR_USRLOCAL: ${{ github.event.inputs.clear_usrlocal }}
           PYTHONFAULTHANDLER: "1"
         run: |
           set +e
+          echo "=== /usr/local/lib contents (commercial_solvers additions) ==="; ls -la /usr/local/lib 2>/dev/null | head -60
+          if [ -n "$CLEAR_USRLOCAL" ]; then
+            echo "Clearing /usr/local/lib except libMad/julia:"
+            sudo find /usr/local/lib -maxdepth 1 -type f ! -iname "*mad*" -print -delete 2>/dev/null
+          fi
           if [ -n "$RM_GLOB" ]; then
             # Component bisection: remove real commercial solver libs (space-separated
             # globs) so they can't load.
