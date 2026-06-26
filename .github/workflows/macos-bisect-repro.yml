@@ -164,12 +164,16 @@ jobs:
         run: |
           set +e
           if [ -n "$RM_GLOB" ]; then
-            # Component bisection: remove a real commercial solver's libs so it can't load.
+            # Component bisection: remove real commercial solver libs (space-separated
+            # globs) so they can't load.
             CASDIR=$(python -c "import casadi,os;print(os.path.dirname(casadi.__file__))")
             echo "RM_GLOB=$RM_GLOB; removing from /usr/local/lib and $CASDIR:"
-            sudo find /usr/local/lib -iname "$RM_GLOB" -print -delete 2>/dev/null
-            find "$CASDIR" -iname "$RM_GLOB" -print -delete 2>/dev/null
-            find "$CASDIR" -iname "libcasadi_*$(echo "$RM_GLOB" | tr -d '*')*" -print -delete 2>/dev/null
+            for g in $RM_GLOB; do
+              sudo find /usr/local/lib -iname "$g" -print -delete 2>/dev/null
+              find "$CASDIR" -iname "$g" -print -delete 2>/dev/null
+              base=$(echo "$g" | tr -d '*')
+              find "$CASDIR" -iname "libcasadi_*${base}*" -print -delete 2>/dev/null
+            done
           fi
           if [ -n "$NO_JULIA" ]; then
             # Necessity test: remove the madnlp plugin so libMad/Julia is never loaded,
