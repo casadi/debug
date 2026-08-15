@@ -1,0 +1,199 @@
+name: macos SIGABRT hunt (test-python-long --run_slow, Julia-masked abort)
+
+# Reproduce the `Abort trap: 6` seen in casadi/casadi run 31639554527, job
+# `test-python-long (312, macos-14, 64)`: the full --run_slow suite aborts ~2300 s in,
+# at function.Functiontests.test_ad_weight_sp, with Julia's crash handler masking the
+# real reason ("[pid] signal 6: Abort trap: 6" + "Allocations: ...; GC: 8").
+#
+# No compilation: install the published wheel, wire the commercial_solvers env (real
+# libMad/Julia), then run a CONFIGURABLE subset of test modules (or individual test
+# ids) x N parallel reps x M sequential inner reps.  Bisect by re-dispatching with a
+# smaller `modules`.  Crash = rc 134 (SIGABRT) / 139 (SIGSEGV).
+
+on:
+  workflow_dispatch:
+    inputs:
+      modules:
+        description: "comma-separated test modules OR dotted test ids (empty = full alltests --run_slow)"
+        default: ""
+      reps:
+        description: "parallel matrix reps"
+        default: "6"
+      inner_reps:
+        description: "sequential repetitions of the subset inside one python process"
+        default: "1"
+      procs:
+        description: "sequential fresh-process repetitions per job"
+        default: "1"
+      python_version:
+        description: "conda python version (crash was on 3.12)"
+        default: "3.12"
+      wheel_url:
+        description: "wheel to install"
+        default: "https://github.com/casadi/casadi/releases/download/nightly-fix-deepbind-environ-snapshot/casadi-3.8.0.dev%2Bfix.deepbind.environ.snapshot-cp311-abi3-macosx_11_0_arm64.whl"
+      src_url:
+        description: "source zip (test files)"
+        default: "https://github.com/casadi/casadi/releases/download/nightly-fix-deepbind-environ-snapshot/casadi-source-vfix-deepbind-environ-snapshot.zip"
+      no_julia:
+        description: "'yes' = remove the madnlp plugin so libMad/Julia never loads"
+        default: ""
+      no_warmup:
+        description: "'yes' = skip the madnlp warmup solve (plugin still present)"
+        default: ""
+
+jobs:
+  setup-matrix:
+    runs-on: ubuntu-latest
+    outputs:
+      reps: ${{ steps.g.outputs.reps }}
+    steps:
+      - id: g
+        run: |
+          N="${{ github.event.inputs.reps }}"; N="${N:-6}"
+          echo "reps=[$(seq -s, 1 "$N")]" >> $GITHUB_OUTPUT
+
+  repro:
+    needs: setup-matrix
+    runs-on: macos-14
+    timeout-minutes: 300
+    env:
+      HAVE_COMM: ${{ secrets.JGILLIS_RESTRICTED != '' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        rep: ${{ fromJson(needs.setup-matrix.outputs.reps) }}
+    steps:
+      - name: Checkout casadi source (test files)
+        run: |
+          set -eux
+          curl -fsSL -o /tmp/cs.zip "${{ github.event.inputs.src_url }}"
+          mkdir -p src && unzip -q /tmp/cs.zip -d src
+          ls src/test/python/alltests.py
+
+      - uses: conda-incubator/setup-miniconda@v3
+        with:
+          python-version: ${{ github.event.inputs.python_version }}
+          activate-environment: test
+          auto-update-conda: true
+
+      - name: Python deps
+        shell: bash -el {0}
+        run: pip install -q --upgrade pip numpy scipy pandas looseversion pyright
+
+      - name: Install casadi wheel
+        shell: bash -el {0}
+        run: |
+          set -eux
+          curl -fsSL -o /tmp/casadi.whl "${{ github.event.inputs.wheel_url }}"
+          pip install -q /tmp/casadi.whl
+          python -c "import casadi;print(casadi.CasadiMeta.version(), casadi.CasadiMeta.git_revision())"
+
+      - name: commercial_solvers (real libMad/Julia, ORT, clarabel, ...)
+        uses: casadi/commercial_solvers@master
+        with:
+          token: ${{ secrets.JGILLIS_RESTRICTED }}
+        if: ${{ env.HAVE_COMM == 'true' }}
+
+      - name: POLYGLOT libMad fallback
+        if: ${{ env.HAVE_COMM != 'true' }}
+        run: |
+          set -eux
+          curl -fsSL -o /tmp/lm.zip "https://github.com/casadi/polyglot/releases/download/evergreen/libMad-osx-arm64.zip"
+          mkdir -p /tmp/lm && unzip -q /tmp/lm.zip -d /tmp/lm
+          sudo cp -R /tmp/lm/lib/ /usr/local/lib/
+          [ -d /tmp/lm/share ] && sudo cp -R /tmp/lm/share/ /usr/local/share/ || true
+
+      - name: libomp
+        run: brew install libomp || true
+
+      - name: pip onnx
+        shell: bash -el {0}
+        run: pip install -q onnx onnxruntime || true
+
+      - name: Fetch test data
+        shell: bash -el {0}
+        run: |
+          set -eux
+          cd src/test/python
+          curl -fL -O https://github.com/casadi/testbot/releases/download/perpetual/serialize_3.5.5.zip && unzip -o serialize_3.5.5.zip || true
+          cd ../data
+          for f in VanDerPol2.fmu VanDerPol3.fmu vdp.fmu cstr.fmu car_t_fmu2.fmu; do curl -fL -O "https://github.com/casadi/testbot/releases/download/perpetual/$f" || true; done
+
+      - name: Write the subset runner
+        run: |
+          cat > src/test/python/bisect_run.py <<'PY'
+          import os, sys
+          sys.argv = ['bisect', '--run_slow']   # helpers.py argparse reads this at import
+          import unittest, importlib
+          DEFAULT = ["mx","sx","typemaps","integration","ocp","nlp","implicitfunction","ad",
+                     "sparsity","linearsolver","matrix","conic","misc","function","tools",
+                     "simulator","vectortools","optistack","feasiblesqpmethod","serialize",
+                     "threads","daebuilder","graph_builder","pyright_stubs"]
+          names = [m for m in os.environ.get("CASADI_BISECT_MODULES","").split(",") if m] or DEFAULT
+          import casadi as ca
+          if not os.environ.get("NO_WARMUP"):
+              try:
+                  x = ca.MX.sym('x', 2)
+                  ca.nlpsol('s', 'madnlp', {'x': x, 'f': ca.sumsqr(x - 1)})(x0=[0.2, 0.3])
+                  print("JULIA_WARMUP_OK", flush=True)
+              except Exception as e:
+                  print("JULIA_WARMUP_FAIL", repr(e), flush=True)
+          print("BISECT_NAMES", names, flush=True)
+          loader = unittest.TestLoader()
+          ok = True
+          for it in range(int(os.environ.get("INNER_REPS", "1"))):
+              suite = unittest.TestSuite()
+              for n in names:
+                  if "." in n:
+                      suite.addTests(loader.loadTestsFromName(n))
+                  else:
+                      suite.addTests(loader.loadTestsFromModule(importlib.import_module(n)))
+              print("INNER_REP", it, flush=True)
+              ok = unittest.TextTestRunner(verbosity=1).run(suite).wasSuccessful() and ok
+          sys.exit(0 if ok else 1)
+          PY
+
+      - name: Run subset (rep ${{ matrix.rep }})
+        shell: bash -el {0}
+        env:
+          CASADI_BISECT_MODULES: ${{ github.event.inputs.modules }}
+          INNER_REPS: ${{ github.event.inputs.inner_reps }}
+          PROCS: ${{ github.event.inputs.procs }}
+          NO_JULIA: ${{ github.event.inputs.no_julia }}
+          NO_WARMUP: ${{ github.event.inputs.no_warmup }}
+          PYTHONFAULTHANDLER: "1"
+        run: |
+          set +e
+          CASDIR=$(python -c "import casadi,os;print(os.path.dirname(casadi.__file__))")
+          if [ -n "$NO_JULIA" ]; then
+            rm -f "$CASDIR"/libcasadi_nlpsol_madnlp.* && echo "REMOVED madnlp plugin"
+          fi
+          if [ "$HAVE_COMM" = "true" ]; then
+            export DYLD_LIBRARY_PATH="$(brew --prefix libomp)/lib:${DYLD_LIBRARY_PATH:-}"
+          fi
+          sudo mkdir -p /cores && sudo chmod 1777 /cores || true
+          ulimit -c unlimited; ulimit -c
+          cd src/test/python
+          python -c "from casadi.tools import *; loadAllCompiledPlugins()" || echo "loadAllCompiledPlugins rc=$?"
+          PYEXE=$(python -c 'import sys;print(sys.executable)')
+          CRASHES=0
+          for p in $(seq 1 "${PROCS:-1}"); do
+            echo "===== PROC $p / ${PROCS:-1} ====="
+            if [ -z "$CASADI_BISECT_MODULES" ]; then
+              python -u alltests.py --run_slow
+            else
+              python -u bisect_run.py
+            fi
+            rc=$?
+            echo "BISECT_RC=$rc (rep ${{ matrix.rep }} proc $p)"
+            if [ "$rc" = "139" ] || [ "$rc" = "134" ]; then
+              echo "CRASH_DETECTED rc=$rc"; CRASHES=$((CRASHES+1))
+            fi
+          done
+          echo "CRASH_TOTAL=$CRASHES (rep ${{ matrix.rep }})"
+          for CORE in $(ls -t /cores/core.* 2>/dev/null | head -2); do
+            echo "=== CORE POST-MORTEM ($CORE) ==="
+            lldb -b -o "bt all" -o "quit" "$PYEXE" -c "$CORE" 2>&1 \
+              | grep -iE "stop reason|frame #|casadi|malloc|free|terminat|__cxa|abort|Sparsity|SXNode|GenericShared|_Unwind|EXC_" | head -100
+          done
+          exit 0
