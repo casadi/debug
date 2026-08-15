@@ -40,6 +40,12 @@ on:
       no_warmup:
         description: "'yes' = skip the madnlp warmup solve (plugin still present)"
         default: ""
+      lldb:
+        description: "'yes' = run python under lldb so SIGABRT is caught before Julia's handler masks it"
+        default: ""
+      malloc_debug:
+        description: "'yes' = MallocScribble/MallocPreScribble/MallocGuardEdges + MallocStackLogging"
+        default: ""
 
 jobs:
   setup-matrix:
@@ -161,6 +167,8 @@ jobs:
           PROCS: ${{ github.event.inputs.procs }}
           NO_JULIA: ${{ github.event.inputs.no_julia }}
           NO_WARMUP: ${{ github.event.inputs.no_warmup }}
+          USE_LLDB: ${{ github.event.inputs.lldb }}
+          MALLOC_DEBUG: ${{ github.event.inputs.malloc_debug }}
           PYTHONFAULTHANDLER: "1"
         run: |
           set +e
@@ -172,19 +180,30 @@ jobs:
             export DYLD_LIBRARY_PATH="$(brew --prefix libomp)/lib:${DYLD_LIBRARY_PATH:-}"
           fi
           sudo mkdir -p /cores && sudo chmod 1777 /cores || true
+          sudo sysctl -w kern.coredump=1 || true
           ulimit -c unlimited; ulimit -c
+          if [ -n "$MALLOC_DEBUG" ]; then
+            export MallocScribble=1 MallocPreScribble=1 MallocGuardEdges=1 MallocStackLogging=1
+          fi
           cd src/test/python
           python -c "from casadi.tools import *; loadAllCompiledPlugins()" || echo "loadAllCompiledPlugins rc=$?"
           PYEXE=$(python -c 'import sys;print(sys.executable)')
+          if [ -z "$CASADI_BISECT_MODULES" ]; then SCRIPT="alltests.py --run_slow"; else SCRIPT="bisect_run.py"; fi
           CRASHES=0
           for p in $(seq 1 "${PROCS:-1}"); do
             echo "===== PROC $p / ${PROCS:-1} ====="
-            if [ -z "$CASADI_BISECT_MODULES" ]; then
-              python -u alltests.py --run_slow
+            if [ -n "$USE_LLDB" ]; then
+              lldb -b -o "process handle -n true -p true -s true SIGABRT SIGSEGV SIGBUS" \
+                   -o "run" -o "bt all" -o "quit" \
+                   -- "$PYEXE" -u $SCRIPT > lldb_$p.log 2>&1
+              tail -300 lldb_$p.log
+              if grep -q "stop reason = signal SIG" lldb_$p.log; then rc=134; else rc=0; fi
+              echo "=== lldb frames of interest ==="
+              grep -nE "stop reason|frame #|casadi|malloc|free|terminat|__cxa|abort|Sparsity|GenericShared" lldb_$p.log | head -120
             else
-              python -u bisect_run.py
+              python -u $SCRIPT
+              rc=$?
             fi
-            rc=$?
             echo "BISECT_RC=$rc (rep ${{ matrix.rep }} proc $p)"
             if [ "$rc" = "139" ] || [ "$rc" = "134" ]; then
               echo "CRASH_DETECTED rc=$rc"; CRASHES=$((CRASHES+1))
