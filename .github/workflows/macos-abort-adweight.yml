@@ -46,6 +46,12 @@ on:
       malloc_debug:
         description: "'yes' = MallocScribble/MallocPreScribble/MallocGuardEdges + MallocStackLogging"
         default: ""
+      script:
+        description: "path (in this repo) of a standalone script to run instead of the test suite, e.g. scripts/mini_xpress_iis.py"
+        default: ""
+      script_env:
+        description: "extra env for the script, e.g. 'CASADI_MINI_IIS=0'"
+        default: ""
 
 jobs:
   setup-matrix:
@@ -69,6 +75,11 @@ jobs:
       matrix:
         rep: ${{ fromJson(needs.setup-matrix.outputs.reps) }}
     steps:
+      - name: Checkout this harness repo (standalone scripts)
+        uses: actions/checkout@v4
+        with:
+          path: harness
+
       - name: Checkout casadi source (test files)
         run: |
           set -eux
@@ -172,6 +183,8 @@ jobs:
           NO_WARMUP: ${{ github.event.inputs.no_warmup }}
           USE_LLDB: ${{ github.event.inputs.lldb }}
           MALLOC_DEBUG: ${{ github.event.inputs.malloc_debug }}
+          SCRIPT_PATH: ${{ github.event.inputs.script }}
+          SCRIPT_ENV: ${{ github.event.inputs.script_env }}
           PYTHONFAULTHANDLER: "1"
         run: |
           set +e
@@ -191,7 +204,11 @@ jobs:
           cd src/test/python
           python -c "from casadi.tools import *; loadAllCompiledPlugins()" || echo "loadAllCompiledPlugins rc=$?"
           PYEXE=$(python -c 'import sys;print(sys.executable)')
-          if [ -z "$CASADI_BISECT_MODULES" ]; then SCRIPT="alltests.py --run_slow"; else SCRIPT="bisect_run.py"; fi
+          if [ -n "$SCRIPT_PATH" ]; then
+            SCRIPT="$GITHUB_WORKSPACE/harness/$SCRIPT_PATH"
+            [ -n "$SCRIPT_ENV" ] && export $SCRIPT_ENV
+            echo "STANDALONE SCRIPT: $SCRIPT (env: $SCRIPT_ENV)"
+          elif [ -z "$CASADI_BISECT_MODULES" ]; then SCRIPT="alltests.py --run_slow"; else SCRIPT="bisect_run.py"; fi
           CRASHES=0
           for p in $(seq 1 "${PROCS:-1}"); do
             echo "===== PROC $p / ${PROCS:-1} ====="
