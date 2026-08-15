@@ -90,8 +90,11 @@ jobs:
         shell: bash -el {0}
         run: |
           set -eux
-          curl -fsSL -o /tmp/casadi.whl "${{ github.event.inputs.wheel_url }}"
-          pip install -q /tmp/casadi.whl
+          # keep the real wheel filename (pip parses it); %2B must become '+'
+          WHL=$(basename "${{ github.event.inputs.wheel_url }}" | sed 's/%2B/+/g')
+          mkdir -p /tmp/whl
+          curl -fsSL -o "/tmp/whl/$WHL" "${{ github.event.inputs.wheel_url }}"
+          pip install -q "/tmp/whl/$WHL"
           python -c "import casadi;print(casadi.CasadiMeta.version(), casadi.CasadiMeta.git_revision())"
 
       - name: commercial_solvers (real libMad/Julia, ORT, clarabel, ...)
