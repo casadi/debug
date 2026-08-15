@@ -46,6 +46,9 @@ on:
       malloc_debug:
         description: "'yes' = MallocScribble/MallocPreScribble/MallocGuardEdges + MallocStackLogging"
         default: ""
+      gmalloc:
+        description: "'yes' = run under libgmalloc (Guard Malloc): every allocation page-aligned so an overflow faults AT the bad write"
+        default: ""
       script:
         description: "path (in this repo) of a standalone script to run instead of the test suite, e.g. scripts/mini_xpress_iis.py"
         default: ""
@@ -183,6 +186,7 @@ jobs:
           NO_WARMUP: ${{ github.event.inputs.no_warmup }}
           USE_LLDB: ${{ github.event.inputs.lldb }}
           MALLOC_DEBUG: ${{ github.event.inputs.malloc_debug }}
+          USE_GMALLOC: ${{ github.event.inputs.gmalloc }}
           SCRIPT_PATH: ${{ github.event.inputs.script }}
           SCRIPT_ENV: ${{ github.event.inputs.script_env }}
           PYTHONFAULTHANDLER: "1"
@@ -198,6 +202,11 @@ jobs:
           sudo mkdir -p /cores && sudo chmod 1777 /cores || true
           sudo sysctl -w kern.coredump=1 || true
           ulimit -c unlimited; ulimit -c
+          if [ -n "$USE_GMALLOC" ]; then
+            export DYLD_INSERT_LIBRARIES=/usr/lib/libgmalloc.dylib
+            export MALLOC_PROTECT_BEFORE=0 MALLOC_FILL_SPACE=1 MALLOC_STRICT_SIZE=1
+            echo "GUARD MALLOC ENABLED (overflow faults at the write; expect ~50x slowdown)"
+          fi
           if [ -n "$MALLOC_DEBUG" ]; then
             export MallocNanoZone=0 MallocScribble=1 MallocPreScribble=1 MallocGuardEdges=1 MallocStackLogging=1
           fi
