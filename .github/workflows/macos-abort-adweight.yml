@@ -199,7 +199,7 @@ jobs:
           sudo sysctl -w kern.coredump=1 || true
           ulimit -c unlimited; ulimit -c
           if [ -n "$MALLOC_DEBUG" ]; then
-            export MallocScribble=1 MallocPreScribble=1 MallocGuardEdges=1 MallocStackLogging=1
+            export MallocNanoZone=0 MallocScribble=1 MallocPreScribble=1 MallocGuardEdges=1 MallocStackLogging=1
           fi
           cd src/test/python
           python -c "from casadi.tools import *; loadAllCompiledPlugins()" || echo "loadAllCompiledPlugins rc=$?"
