@@ -24,6 +24,7 @@ import casadi as ca
 IIS = os.environ.get("CASADI_MINI_IIS", "1") == "1"
 ROUNDS = int(os.environ.get("CASADI_MINI_ROUNDS", "50"))
 CHURN = int(os.environ.get("CASADI_MINI_CHURN", "20000"))
+MODE = os.environ.get("CASADI_MINI_MODE", "both")   # lp | milp | both
 
 _libc = ctypes.CDLL(None)
 try:
@@ -72,18 +73,15 @@ def churn(n):
             keep = []
 
 
-print("START compute_iis=%s rounds=%d churn=%d zone_ok=%s"
-      % (IIS, ROUNDS, CHURN, zone_ok()), flush=True)
+print("START compute_iis=%s mode=%s rounds=%d churn=%d zone_ok=%s"
+      % (IIS, MODE, ROUNDS, CHURN, zone_ok()), flush=True)
 
 for r in range(ROUNDS):
-    st_lp = iis_lp()
-    ok_lp = zone_ok()
-    st_mip = iis_milp()
-    ok_mip = zone_ok()
-    churn(CHURN)
-    print("ROUND %d iis_rows_lp=%s iis_rows_mip=%s zone_after_lp=%s zone_after_mip=%s zone_after_churn=%s"
-          % (r, len(st_lp.get("iis_rows", [])), len(st_mip.get("iis_rows", [])),
-             ok_lp, ok_mip, zone_ok()), flush=True)
+    n_lp = len(iis_lp().get("iis_rows", [])) if MODE in ("lp", "both") else -1
+    n_mip = len(iis_milp().get("iis_rows", [])) if MODE in ("milp", "both") else -1
+    if CHURN:
+        churn(CHURN)
+    print("ROUND %d mode=%s iis_rows_lp=%s iis_rows_mip=%s" % (r, MODE, n_lp, n_mip), flush=True)
 
 print("NO CRASH", flush=True)
 sys.exit(0)
