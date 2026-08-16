@@ -13,7 +13,7 @@ import os
 import casadi as ca
 
 IIS = os.environ.get("CASADI_MWE_IIS", "1") == "1"
-N = int(os.environ.get("CASADI_MWE_N", "50"))
+N = int(os.environ.get("CASADI_MWE_N", "500"))
 
 x = ca.MX.sym("x")
 for i in range(N):
