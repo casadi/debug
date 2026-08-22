@@ -1,0 +1,111 @@
+name: Replicate casadi/casadi publish-npm smoke failure (no publish)
+
+on:
+  push:
+  workflow_dispatch:
+
+# Background:
+#   casadi/casadi binaries.yml job `publish-npm` fails at its
+#   "Verify the packed tarball loads + solves (before publish)" step with
+#     smoke FAIL: unexpected solution
+#     primal solution = [5, 5]
+#   i.e. IPOPT converged to the right answer -- only the *assertion* fails.
+#
+#   Hypothesis: the smoke check scrapes the packaged example's printed text
+#   and splits it on whitespace. docs/examples/javascript/simple_nlp.js logs
+#   `sol["x"]` directly, whose DM toString is "[5, 5]", so the split yields
+#   ["[5,", "5]"] -> [NaN, NaN]. The parser was written against an earlier
+#   draft that printed `sol["x"].nonzeros().join(" ")` ("5 5").
+#
+#   publish-npm only runs on release-* refs and non-PR events, so this never
+#   executed until the release-3.8.0 push.
+#
+# This job reuses the published nightly wasm zip (no rebuild) and runs
+#   A) the current casadi/casadi smoke check  -> expected to FAIL
+#   B) the proposed replacement               -> expected to PASS
+# The npm publish step is deliberately absent.
+
+jobs:
+  npm-smoke:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Fetch the nightly casadi-wasm zip (same bytes publish-npm consumes)
+        run: |
+          wget -q https://github.com/casadi/casadi/releases/download/nightly-release-3.8.0/casadi-wasm-v3.8.0.zip
+          unzip -q casadi-wasm-v3.8.0.zip
+          ls -la casadi-wasm | head -20
+
+      - uses: actions/setup-node@v4.4.0
+        with:
+          node-version: '22'
+
+      - name: Pack the tarball exactly like publish-npm does
+        working-directory: casadi-wasm
+        run: |
+          npm pkg set version='3.8.0'
+          TGZ=$(npm pack | tail -1)
+          rm -rf verify && mkdir verify && tar -xzf "$TGZ" -C verify
+          ls verify/package
+
+      - name: What the packaged example actually prints
+        working-directory: casadi-wasm/verify/package
+        run: |
+          grep -n 'log("primal' examples/simple_nlp.js
+
+      - name: (A) current smoke check -- expected to FAIL
+        id: current
+        continue-on-error: true
+        working-directory: casadi-wasm/verify/package
+        run: |
+          node -e '
+            const create  = require("./casadi.js");
+            const example = require("./examples/simple_nlp.js");
+            (async () => {
+              const M = await create();
+              if (typeof M.load_nlpsol === "function") await M.load_nlpsol("ipopt");
+              const out = [];
+              await example(M, (...a) => out.push(a.join(" ")));
+              const primal = out.find(l => l.startsWith("primal solution"));
+              const nums = primal ? (primal.split("=")[1]||"").trim().split(/\s+/).map(Number) : [];
+              console.error("DEBUG primal line : " + JSON.stringify(primal));
+              console.error("DEBUG parsed nums : [" + nums.join(", ") + "]");
+              if (nums.length !== 2 || !nums.every(v => Math.abs(v - 5) < 0.01)) {
+                console.error("smoke FAIL: unexpected solution\n" + out.join("\n")); process.exit(1);
+              }
+              console.log("smoke OK -> " + primal);
+            })().catch(e => { console.error("smoke FAIL:", e && e.stack || e); process.exit(1); });
+          '
+
+      - name: (B) proposed smoke check -- expected to PASS
+        working-directory: casadi-wasm/verify/package
+        run: |
+          node -e '
+            const create  = require("./casadi.js");
+            const example = require("./examples/simple_nlp.js");
+            (async () => {
+              const M = await create();
+              if (typeof M.load_nlpsol === "function") await M.load_nlpsol("ipopt");
+              // 1. the shipped example must run end-to-end from inside the tarball
+              await example(M, () => {});
+              // 2. assert on returned numbers, never on printed text
+              const x = M.SX.sym("x", 2);
+              const [x0, x1] = M.vertsplit(x);
+              const nlp = { x: x, f: M.plus(M.times(x0, x0), M.times(x1, x1)),
+                                  g: M.minus(M.plus(x0, x1), M.SX(10)) };
+              const sol = M.nlpsol("solver", "ipopt", nlp).call({ lbg: M.DM(0) });
+              const primal = Array.from(sol["x"].nonzeros());
+              if (primal.length !== 2 || !primal.every(v => Math.abs(v - 5) < 0.01)) {
+                console.error("smoke FAIL: unexpected solution [" + primal.join(", ") + "]");
+                process.exit(1);
+              }
+              console.log("smoke OK -> primal solution = [" + primal.join(", ") + "]");
+            })().catch(e => { console.error("smoke FAIL:", e && e.stack || e); process.exit(1); });
+          '
+
+      - name: Verdict
+        run: |
+          echo "current smoke check outcome: ${{ steps.current.outcome }}"
+          if [ "${{ steps.current.outcome }}" != "failure" ]; then
+            echo "REPLICATION FAILED: the current check did not fail as expected"; exit 1
+          fi
+          echo "REPLICATED: current check fails, proposed check passes."
