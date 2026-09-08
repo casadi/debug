@@ -139,7 +139,7 @@ def run(args):
         print(f'Starting {name}: {args.count} cycles', flush=True)
         with output.with_suffix('.driver.log').open('w') as log:
             result = subprocess.run(command, stdout=log, stderr=subprocess.STDOUT,
-                                    env=env, timeout=600)
+                                    env=env, timeout=args.timeout)
         after = system_memory()
         rows = [json.loads(line) for line in output.read_text().splitlines()] if output.exists() else []
         complete = rows and rows[-1].get('completed') == args.count
@@ -189,6 +189,7 @@ def main():
     parser.add_argument('--count', type=int, default=1000)
     parser.add_argument('--output', type=Path, default=Path('results'))
     parser.add_argument('--gdb', default='gdb')
+    parser.add_argument('--timeout', type=int, default=600)
     parser.add_argument('--pid', type=int)
     args = parser.parse_args()
     if args.action == 'send': send_ctrl_c(args.pid)

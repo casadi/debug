@@ -32,12 +32,18 @@ jobs:
           python -m pip freeze
           Get-CimInstance Win32_OperatingSystem | Select-Object Caption, Version, TotalVisibleMemorySize
           Get-CimInstance Win32_PageFileUsage | Format-List *
+      - name: Validate console-interrupt pilot
+        shell: pwsh
+        run: python issue3605/probe.py run --gdb "$env:PROBE_GDB" --count 3 --timeout 60 --output pilot
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: issue3605-pilot-${{ matrix.casadi }}
+          path: pilot/
+          if-no-files-found: warn
       - name: Run monitored loops
         shell: pwsh
-        run: |
-          python issue3605/probe.py run --gdb "$env:PROBE_GDB" --count 3 --output pilot
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          python issue3605/probe.py run --gdb "$env:PROBE_GDB" --count 1000 --output results
+        run: python issue3605/probe.py run --gdb "$env:PROBE_GDB" --count 1000 --output results
       - name: Final pagefile state
         if: always()
         shell: pwsh
