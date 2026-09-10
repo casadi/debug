@@ -49,3 +49,19 @@ jobs:
       - name: 5 ctypes preload by full path (known-good reference)
         shell: bash
         run: python ort/variant.py preload
+
+      - name: 6 is onnxruntime.dll a KnownDLL / what does the OS say?
+        shell: cmd
+        run: |
+          reg query "HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\KnownDLLs" | findstr /i onnx
+          echo KnownDLLs-query-exit=%errorlevel%
+          dir C:\Windows\System32\onnxruntime*.dll
+          powershell -c "(Get-Item C:\Windows\System32\onnxruntime.dll).VersionInfo | Format-List *"
+
+      - name: 7 real ORT copied NEXT TO the plugin (DLL_LOAD_DIR)
+        shell: bash
+        run: |
+          CAS=$(python -c "import casadi,os;print(os.path.dirname(casadi.__file__))")
+          cp "$ORT_DIR/onnxruntime.dll" "$CAS/"
+          ls -la "$CAS/onnxruntime.dll"
+          python ort/variant.py control
