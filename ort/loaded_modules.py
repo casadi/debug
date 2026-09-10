@@ -16,15 +16,14 @@ def loaded():
         psapi, k32 = ctypes.WinDLL("psapi"), ctypes.WinDLL("kernel32")
         # HANDLE is pointer-sized: without these the -1 pseudo-handle is passed as a
         # 32-bit int and EnumProcessModules quietly returns nothing.
-        k32.GetCurrentProcess.restype = wintypes.HANDLE
         psapi.EnumProcessModules.argtypes = [wintypes.HANDLE,
                                              ctypes.POINTER(wintypes.HMODULE),
                                              wintypes.DWORD,
                                              ctypes.POINTER(wintypes.DWORD)]
         n = wintypes.DWORD()
         arr = (wintypes.HMODULE * 2048)()
-        if not psapi.EnumProcessModules(k32.GetCurrentProcess(), arr, ctypes.sizeof(arr),
-                                        ctypes.byref(n)):
+        proc = wintypes.HANDLE(-1)  # GetCurrentProcess(), without a lossy round-trip
+        if not psapi.EnumProcessModules(proc, arr, ctypes.sizeof(arr), ctypes.byref(n)):
             raise OSError("EnumProcessModules failed: %d" % ctypes.get_last_error())
         out = []
         for i in range(n.value // ctypes.sizeof(wintypes.HMODULE)):
