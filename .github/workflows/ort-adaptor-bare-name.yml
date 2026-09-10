@@ -1,0 +1,81 @@
+# Does CASADI_ONNXRUNTIME_LIB accept a bare module name, and does it then bind the
+# ONNX Runtime the process already loaded? Linux says yes (matched by DT_SONAME);
+# this settles Windows and macOS, and checks System32 still cannot be reached by name.
+name: ORT adaptor bare-name contract
+
+on: [push, workflow_dispatch]
+
+jobs:
+  probe:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            ort: onnxruntime-linux-x64-1.22.0
+            ext: tgz
+            real: lib/libonnxruntime.so
+            bare: libonnxruntime.so.1
+            adaptor: ai/lib/libonnxruntime_adaptor.so
+          - os: macos-14
+            ort: onnxruntime-osx-arm64-1.22.0
+            ext: tgz
+            real: lib/libonnxruntime.dylib
+            bare: libonnxruntime.1.22.0.dylib
+            adaptor: ai/lib/libonnxruntime_adaptor.dylib
+          - os: windows-2022
+            ort: onnxruntime-win-x64-1.22.0
+            ext: zip
+            real: lib/onnxruntime.dll
+            bare: onnxruntime.dll
+            adaptor: ai/bin/libonnxruntime_adaptor.dll
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4.1.1
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Fetch a real ONNX Runtime
+        run: |
+          curl -fsSL -o ort.${{matrix.ext}} \
+            https://github.com/microsoft/onnxruntime/releases/download/v1.22.0/${{matrix.ort}}.${{matrix.ext}}
+          if [ "${{matrix.ext}}" = "zip" ]; then unzip -q ort.zip; else tar xzf ort.tgz; fi
+          ls ${{matrix.ort}}/lib
+
+      - name: Build the adaptor from casadi/mockups master
+        run: |
+          git clone --depth 1 https://github.com/casadi/mockups.git
+          cmake -S mockups/onnxruntime -B ab -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="$PWD/ai"
+          cmake --build ab --config Release
+          cmake --install ab --config Release
+          find ai -type f | sort
+
+      - name: 1 bare name, nothing preloaded (expect a clean refusal)
+        env:
+          CASADI_ONNXRUNTIME_LIB: ${{ matrix.bare }}
+        run: python ort/adaptor_probe.py "${{matrix.adaptor}}"; echo "exit=$?"
+
+      - name: 2 bare name, runtime preloaded by full path (expect REUSE)
+        env:
+          CASADI_ONNXRUNTIME_LIB: ${{ matrix.bare }}
+        run: python ort/adaptor_probe.py "${{matrix.adaptor}}" "$PWD/${{matrix.ort}}/${{matrix.real}}"
+
+      - name: 3 full path (expect load)
+        env:
+          CASADI_ONNXRUNTIME_LIB: ${{ github.workspace }}/${{matrix.ort}}/${{matrix.real}}
+        run: python ort/adaptor_probe.py "${{matrix.adaptor}}"
+
+      - name: 4 relative path (expect a clean refusal, not a search)
+        env:
+          CASADI_ONNXRUNTIME_LIB: ./${{matrix.ort}}/${{matrix.real}}
+        run: python ort/adaptor_probe.py "${{matrix.adaptor}}"; echo "exit=$?"
+
+      - name: 5 Windows only - can a bare name reach System32?
+        if: runner.os == 'Windows'
+        run: |
+          ls -l /c/Windows/System32/onnxruntime.dll || echo "no System32 ORT on this image"
+          python ort/win_bare_name.py "$PWD/${{matrix.ort}}/${{matrix.real}}"
