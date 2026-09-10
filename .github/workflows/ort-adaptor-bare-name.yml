@@ -87,3 +87,8 @@ jobs:
         run: |
           ls -l /c/Windows/System32/onnxruntime.dll || echo "no System32 ORT on this image"
           python ort/win_bare_name.py "$PWD/${{matrix.ort}}/${{matrix.real}}"
+
+      - name: 6 does `import onnxruntime` put a reusable runtime in the process?
+        run: |
+          python -m pip install --quiet onnxruntime
+          python ort/loaded_modules.py --import-onnxruntime
