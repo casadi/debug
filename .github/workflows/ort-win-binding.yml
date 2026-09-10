@@ -1,0 +1,63 @@
+# casadi/casadi#4406: on windows the ort plugin loads but GetApi() returns NULL.
+# Which onnxruntime.dll does it bind, and what does that DLL answer?
+name: ORT binding on Windows
+
+on: [push, workflow_dispatch]
+
+jobs:
+  ort-win:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4.1.1
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Fetch casadi wheel (branch nightly) and the MS ONNX Runtime release
+        shell: bash
+        run: |
+          URL="https://github.com/casadi/casadi/releases/download/nightly-fix-onnxruntime-mockup-shadowing/casadi-3.8.0.dev%2Bfix.onnxruntime.mockup.shadowing-cp311-abi3-win_amd64.whl"
+          WHL=$(basename "$URL" | sed 's/%2B/+/g')
+          mkdir -p whl && curl -fsSL -o "whl/$WHL" "$URL"
+          curl -fsSL -o ort.zip https://github.com/microsoft/onnxruntime/releases/download/v1.22.0/onnxruntime-win-x64-1.22.0.zip
+          unzip -q ort.zip
+          ls -la whl "onnxruntime-win-x64-1.22.0/lib"
+
+      - name: Install
+        shell: bash
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install whl/*.whl onnx onnxruntime numpy
+          python -c "import onnxruntime,os;print('pip ORT',onnxruntime.__version__,os.path.dirname(onnxruntime.__file__))"
+
+      - name: What the shipped wheel contains
+        shell: bash
+        run: |
+          python - <<'EOF'
+          import casadi, os, glob
+          d = os.path.dirname(casadi.__file__)
+          print("casadi package:", d)
+          for f in sorted(glob.glob(os.path.join(d, "*onnx*"))):
+              print("  %10d  %s" % (os.path.getsize(f), os.path.basename(f)))
+          EOF
+
+      - name: A - real ORT on PATH, casadi first (mimics test-python-long)
+        shell: bash
+        env:
+          ORT_DIR: ${{ github.workspace }}\onnxruntime-win-x64-1.22.0\lib
+        run: |
+          export PATH="$GITHUB_WORKSPACE/onnxruntime-win-x64-1.22.0/lib:$PATH"
+          python ort/probe.py plain
+
+      - name: B - real ORT on PATH, pip onnxruntime imported FIRST
+        shell: bash
+        env:
+          ORT_DIR: ${{ github.workspace }}\onnxruntime-win-x64-1.22.0\lib
+        run: |
+          export PATH="$GITHUB_WORKSPACE/onnxruntime-win-x64-1.22.0/lib:$PATH"
+          python ort/probe.py preimport
+
+      - name: C - no ORT on PATH (plain pip user, i.e. the #4406 reporter)
+        shell: bash
+        run: |
+          python ort/probe.py plain
