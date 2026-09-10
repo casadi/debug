@@ -1,0 +1,56 @@
+# Can a plugin dependency live outside the plugin's own directory on Windows?
+# (the rtc-tools scenario: libcasadi_conic_highs.dll needs libhighs.dll)
+name: Windows plugin dependency reachability
+
+on: [push, workflow_dispatch]
+
+jobs:
+  deps:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4.1.1
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - shell: bash
+        run: |
+          URL="https://github.com/casadi/casadi/releases/download/nightly-fix-onnxruntime-mockup-shadowing/casadi-3.8.0.dev%2Bfix.onnxruntime.mockup.shadowing-cp311-abi3-win_amd64.whl"
+          WHL=$(basename "$URL" | sed 's/%2B/+/g')
+          mkdir -p whl && curl -fsSL -o "whl/$WHL" "$URL"
+          python -m pip install "whl/$WHL" numpy
+
+      - name: 0 baseline - dependency next to the plugin
+        shell: bash
+        run: python ort/deps.py baseline
+
+      - name: move libhighs.dll out of the casadi dir
+        shell: bash
+        run: |
+          CAS=$(python -c "import casadi,os;print(os.path.dirname(casadi.__file__))")
+          DEP=$(dirname "$CAS")/moved_deps
+          mkdir -p "$DEP" && mv "$CAS/libhighs.dll" "$DEP/"
+          echo "DEPDIR=$DEP" >> $GITHUB_ENV
+          ls "$DEP"
+
+      - name: 1 dependency only in moved dir, nothing points there
+        shell: bash
+        run: python ort/deps.py orphaned
+
+      - name: 2 dependency dir on PATH
+        shell: bash
+        run: |
+          export PATH="$DEPDIR:$PATH"
+          python ort/deps.py on-path
+
+      - name: 3 dependency dir in CASADI_PLUGIN_SEARCH_PATH
+        shell: bash
+        run: |
+          CAS=$(python -c "import casadi,os;print(os.path.dirname(casadi.__file__))")
+          export CASADI_PLUGIN_SEARCH_PATH=$(cygpath -w "$DEPDIR")
+          python ort/deps.py in-cpsp
+
+      - name: 4 dependency dir in CASADIPATH
+        shell: bash
+        run: |
+          export CASADIPATH=$(cygpath -w "$DEPDIR")
+          python ort/deps.py in-casadipath
