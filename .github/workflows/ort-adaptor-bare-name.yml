@@ -92,3 +92,6 @@ jobs:
         run: |
           python -m pip install --quiet onnxruntime
           python ort/loaded_modules.py --import-onnxruntime
+          if [ "${{runner.os}}" = "Windows" ]; then
+            python ort/win_bare_name.py --after-import-onnxruntime
+          fi

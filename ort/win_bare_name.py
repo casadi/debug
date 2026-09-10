@@ -39,6 +39,13 @@ def probe():
     report("GetModuleHandleExW(bare)", h if ok else None)
 
 
+if "--after-import-onnxruntime" in sys.argv:
+    # Does the pip package leave a DLL a bare CASADI_ONNXRUNTIME_LIB could reuse?
+    import onnxruntime
+    print("imported onnxruntime %s" % onnxruntime.__version__)
+    probe()
+    raise SystemExit(0)
+
 print("A. before loading anything")
 probe()
 if len(sys.argv) > 1:
