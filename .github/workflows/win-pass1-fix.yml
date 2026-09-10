@@ -1,0 +1,51 @@
+# Does the patched casadi_os.cpp pass 1 (fully-qualified candidate + cumulative prefix of
+# registered dirs) fix what today's pass 1 cannot? Replica of the C++, run against the
+# shipped plugins - no casadi rebuild needed.
+name: Windows pass-1 fix validation
+
+on: [push, workflow_dispatch]
+
+env:
+  ORT_DIR: ${{ github.workspace }}\onnxruntime-win-x64-1.22.0\lib
+
+jobs:
+  pass1:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4.1.1
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - shell: bash
+        run: |
+          URL="https://github.com/casadi/casadi/releases/download/nightly-fix-onnxruntime-mockup-shadowing/casadi-3.8.0.dev%2Bfix.onnxruntime.mockup.shadowing-cp311-abi3-win_amd64.whl"
+          WHL=$(basename "$URL" | sed 's/%2B/+/g')
+          mkdir -p whl && curl -fsSL -o "whl/$WHL" "$URL"
+          curl -fsSL -o ort.zip https://github.com/microsoft/onnxruntime/releases/download/v1.22.0/onnxruntime-win-x64-1.22.0.zip
+          unzip -q ort.zip
+          python -m pip install "whl/$WHL" numpy
+
+      - name: ORT - today's pass 1
+        shell: bash
+        run: python ort/newpass1.py ort old
+      - name: ORT - patched pass 1
+        shell: bash
+        run: python ort/newpass1.py ort new
+
+      - name: control (everything in the casadi dir) - patched
+        shell: bash
+        run: python ort/newpass1.py control new
+
+      - name: dependency moved to another search path - today's pass 1
+        shell: bash
+        run: python ort/newpass1.py highs-dep-moved old
+      - name: dependency moved to another search path - patched
+        shell: bash
+        run: python ort/newpass1.py highs-dep-moved new
+      - name: dependency moved, that path NOT given - patched (must fail)
+        shell: bash
+        run: python ort/newpass1.py highs-dep-moved-nopath new
+
+      - name: self-contained override wins entirely from itself - patched
+        shell: bash
+        run: python ort/newpass1.py clean-override new
