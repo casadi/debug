@@ -34,3 +34,6 @@ jobs:
       - name: legacy LoadLibrary (pass 2 shape)
         shell: bash
         run: python ort/loader.py legacy
+      - name: all search paths registered up front, bare-name lookup (the proposal)
+        shell: bash
+        run: python ort/loader.py allcookies
