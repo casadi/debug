@@ -57,7 +57,11 @@ jobs:
       - name: 1 bare name, nothing preloaded (expect a clean refusal)
         env:
           CASADI_ONNXRUNTIME_LIB: ${{ matrix.bare }}
-        run: python ort/adaptor_probe.py "${{matrix.adaptor}}"; echo "exit=$?"
+        run: |
+          set +e
+          python ort/adaptor_probe.py "${{matrix.adaptor}}"
+          echo "exit=$?"
+          exit 0
 
       - name: 2 bare name, runtime preloaded by full path (expect REUSE)
         env:
@@ -72,7 +76,11 @@ jobs:
       - name: 4 relative path (expect a clean refusal, not a search)
         env:
           CASADI_ONNXRUNTIME_LIB: ./${{matrix.ort}}/${{matrix.real}}
-        run: python ort/adaptor_probe.py "${{matrix.adaptor}}"; echo "exit=$?"
+        run: |
+          set +e
+          python ort/adaptor_probe.py "${{matrix.adaptor}}"
+          echo "exit=$?"
+          exit 0
 
       - name: 5 Windows only - can a bare name reach System32?
         if: runner.os == 'Windows'
