@@ -21,6 +21,8 @@ print("CASADI_PLUGIN_SEARCH_PATH =", os.environ.get("CASADI_PLUGIN_SEARCH_PATH")
 
 if mode == "adddll":
   os.add_dll_directory(ortdir); print("os.add_dll_directory(%s)" % ortdir)
+elif mode == "pipimport":
+  import onnxruntime as _ort; print("imported pip onnxruntime", _ort.__version__)
 elif mode == "preload":
   ctypes.WinDLL(os.path.join(ortdir, "onnxruntime.dll")); print("ctypes-preloaded by full path")
 

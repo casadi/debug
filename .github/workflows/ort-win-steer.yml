@@ -65,3 +65,13 @@ jobs:
           cp "$ORT_DIR/onnxruntime.dll" "$CAS/"
           ls -la "$CAS/onnxruntime.dll"
           python ort/variant.py control
+
+      - name: 8 plain pip user - does "import onnxruntime" first rescue it?
+        shell: bash
+        run: |
+          CAS=$(python -c "import casadi,os;print(os.path.dirname(casadi.__file__))")
+          rm -f "$CAS/onnxruntime.dll"          # undo step 7
+          python -m pip install onnxruntime -q
+          python ort/variant.py pipimport
+          echo "--- and without the import, for contrast:"
+          python ort/variant.py control
