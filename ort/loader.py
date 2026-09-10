@@ -35,9 +35,22 @@ flags = {
   "flags-nocookie": (DLL_LOAD_DIR | USER_DIRS | DEFAULT_DIRS, False),
   "nosystem32":     (DLL_LOAD_DIR | USER_DIRS | APPLICATION_DIR, True),
   "legacy":         (0, True),
-  "allcookies":     (DLL_LOAD_DIR | USER_DIRS | DEFAULT_DIRS, True),                                          # casadi pass 2 shape
+  "allcookies":     (DLL_LOAD_DIR | USER_DIRS | DEFAULT_DIRS, True),
+  "bare_dllloaddir":(DLL_LOAD_DIR | USER_DIRS | DEFAULT_DIRS, True),   # exactly casadi pass 1
+  "bare_nodllload": (USER_DIRS | DEFAULT_DIRS, True),                                          # casadi pass 2 shape
 }[case]
 dwFlags, want_cookie = flags
+
+if case.startswith("bare_"):
+  # casadi pass 1 shape: ONE search path registered, plugin looked up by BARE NAME
+  print("AddDllDirectory(%s) -> %s" % (os.path.dirname(plugin),
+        "ok" if k32.AddDllDirectory(os.path.dirname(plugin)) else "FAILED"))
+  k32.AddDllDirectory(ortdir)
+  print("case=%s flags=0x%x (bare name)" % (case, flags[0]))
+  h = k32.LoadLibraryExW("libcasadi_onnx_ort.dll", None, flags[0])
+  print("LoadLibraryExW ->", "ok" if h else "FAILED err=%d" % ctypes.get_last_error())
+  print("BOUND:", bound())
+  raise SystemExit(0)
 
 if case == "allcookies":
   # the proposal: register EVERY search path up front, keep them for the whole pass,
