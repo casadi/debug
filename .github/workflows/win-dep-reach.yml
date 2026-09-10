@@ -54,3 +54,19 @@ jobs:
         run: |
           export CASADIPATH=$(cygpath -w "$DEPDIR")
           python ort/deps.py in-casadipath
+
+      - name: 5 dependency dir on PATH - set natively in cmd (no MSYS mangling)
+        shell: cmd
+        run: |
+          for /f %%i in ('python -c "import casadi,os;print(os.path.join(os.path.dirname(os.path.dirname(casadi.__file__)),'moved_deps'))"') do set DEP=%%i
+          echo DEP=%DEP%
+          set PATH=%DEP%;%PATH%
+          python ort\deps.py on-path-cmd
+
+      - name: 6 both PATH and CASADI_PLUGIN_SEARCH_PATH, natively
+        shell: cmd
+        run: |
+          for /f %%i in ('python -c "import casadi,os;print(os.path.join(os.path.dirname(os.path.dirname(casadi.__file__)),'moved_deps'))"') do set DEP=%%i
+          set PATH=%DEP%;%PATH%
+          set CASADI_PLUGIN_SEARCH_PATH=%DEP%
+          python ort\deps.py both-cmd
