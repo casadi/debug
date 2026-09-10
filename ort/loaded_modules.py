@@ -20,6 +20,7 @@ def loaded():
                                              ctypes.POINTER(wintypes.HMODULE),
                                              wintypes.DWORD,
                                              ctypes.POINTER(wintypes.DWORD)]
+        k32.GetModuleFileNameW.argtypes = [wintypes.HMODULE, wintypes.LPWSTR, wintypes.DWORD]
         n = wintypes.DWORD()
         arr = (wintypes.HMODULE * 2048)()
         proc = wintypes.HANDLE(-1)  # GetCurrentProcess(), without a lossy round-trip

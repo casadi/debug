@@ -91,7 +91,8 @@ jobs:
       - name: 6 does `import onnxruntime` put a reusable runtime in the process?
         run: |
           python -m pip install --quiet onnxruntime
-          python ort/loaded_modules.py --import-onnxruntime
+          # the decisive probe first: can a bare CASADI_ONNXRUNTIME_LIB see it?
           if [ "${{runner.os}}" = "Windows" ]; then
             python ort/win_bare_name.py --after-import-onnxruntime
           fi
+          python ort/loaded_modules.py --import-onnxruntime
