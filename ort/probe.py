@@ -42,18 +42,22 @@ if mode == "preimport":
   import onnxruntime as ort
   print("pip onnxruntime", ort.__version__, "imported first")
 
-print("-- candidate DLLs on disk:")
+if mode == "ci":
+  print("-- (ci mode: not touching any DLL before casadi)")
+print("-- candidate DLLs on disk:") if mode != "ci" else None
 import glob
 cands = []
-for pat in (os.path.join(os.environ.get("ORT_DIR", ""), "onnxruntime.dll"),
+if mode == "ci": cands = None
+for pat in () if cands is None else (os.path.join(os.environ.get("ORT_DIR", ""), "onnxruntime.dll"),
             os.path.join(os.path.dirname(__file__), "..", "ortpip", "onnxruntime", "capi", "onnxruntime.dll")):
   cands += glob.glob(pat)
-try:
-  import onnxruntime as _o
-  cands += glob.glob(os.path.join(os.path.dirname(_o.__file__), "capi", "onnxruntime.dll"))
-except Exception:
-  pass
-for c in dict.fromkeys(cands):
+if cands is not None:
+  try:
+    import onnxruntime as _o
+    cands += glob.glob(os.path.join(os.path.dirname(_o.__file__), "capi", "onnxruntime.dll"))
+  except Exception:
+    pass
+for c in dict.fromkeys(cands or []):
   print(" *", c)
   probe(c)
 

@@ -1,0 +1,48 @@
+# casadi/casadi#4406 follow-up: test-python-long (windows) fails with a NULL OrtApi even
+# though the plugin loads and a real ORT 1.22 is first on PATH. Replicate that job's env.
+name: ORT binding on Windows (commercial_solvers)
+
+on: [push, workflow_dispatch]
+
+jobs:
+  ort-win-cs:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4.1.1
+      - uses: conda-incubator/setup-miniconda@77236efeba76d591229f44c36f2469426cc33dec
+        with:
+          python-version: "3.12"
+          activate-environment: py3.12
+          auto-update-conda: true
+      - run: conda install -y pip
+        shell: bash -el {0}
+
+      - uses: casadi/commercial_solvers@master
+        with:
+          token: ${{ secrets.JGILLIS_RESTRICTED }}
+
+      - name: Install casadi branch wheel + onnx stack (as test-python-long does)
+        shell: bash -el {0}
+        run: |
+          URL="https://github.com/casadi/casadi/releases/download/nightly-fix-onnxruntime-mockup-shadowing/casadi-3.8.0.dev%2Bfix.onnxruntime.mockup.shadowing-cp311-abi3-win_amd64.whl"
+          WHL=$(basename "$URL" | sed 's/%2B/+/g')
+          mkdir -p whl && curl -fsSL -o "whl/$WHL" "$URL"
+          pip install "whl/$WHL" numpy scipy
+          pip install onnx onnxruntime; exit 0
+
+      - name: Every onnxruntime*.dll on PATH, and what it serves
+        shell: bash -el {0}
+        run: |
+          echo "PATH=$PATH" | tr ':' '\n' | head -30
+          python ort/scan.py
+
+      - name: The failing sequence (nothing preloaded by the probe)
+        shell: bash -el {0}
+        run: python ort/probe.py ci
+
+      - name: The real graph_builder.py from the branch
+        shell: bash -el {0}
+        run: |
+          git clone -q --depth 1 -b fix-onnxruntime-mockup-shadowing https://github.com/casadi/casadi.git ca-src
+          cd ca-src/test/python
+          python graph_builder.py 2>&1 | tail -40
