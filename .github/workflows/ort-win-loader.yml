@@ -1,0 +1,36 @@
+# Does keeping the AddDllDirectory cookie ACTIVE during LoadLibraryExW beat System32?
+name: ORT loader precedence on Windows
+
+on: [push, workflow_dispatch]
+
+env:
+  ORT_DIR: ${{ github.workspace }}\onnxruntime-win-x64-1.22.0\lib
+
+jobs:
+  loader:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4.1.1
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - shell: bash
+        run: |
+          URL="https://github.com/casadi/casadi/releases/download/nightly-fix-onnxruntime-mockup-shadowing/casadi-3.8.0.dev%2Bfix.onnxruntime.mockup.shadowing-cp311-abi3-win_amd64.whl"
+          WHL=$(basename "$URL" | sed 's/%2B/+/g')
+          mkdir -p whl && curl -fsSL -o "whl/$WHL" "$URL"
+          curl -fsSL -o ort.zip https://github.com/microsoft/onnxruntime/releases/download/v1.22.0/onnxruntime-win-x64-1.22.0.zip
+          unzip -q ort.zip
+          python -m pip install "whl/$WHL" numpy
+      - name: cookie held across the load (the proposed pass 1)
+        shell: bash
+        run: python ort/loader.py flags+cookie
+      - name: same flags, cookie removed first (today's pass 1)
+        shell: bash
+        run: python ort/loader.py flags-nocookie
+      - name: cookie + flags WITHOUT System32
+        shell: bash
+        run: python ort/loader.py nosystem32
+      - name: legacy LoadLibrary (pass 2 shape)
+        shell: bash
+        run: python ort/loader.py legacy
