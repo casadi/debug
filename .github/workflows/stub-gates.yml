@@ -1,0 +1,68 @@
+name: stub gates (mypy/stubtest/ruff) on every OS
+
+on: [push, workflow_dispatch]
+
+jobs:
+  gates:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - image: ubuntu-24.04
+            whl: casadi-3.8.0.dev%2Bissue.4407-cp311-abi3-manylinux2014_x86_64.whl
+          - image: macos-14
+            whl: casadi-3.8.0.dev%2Bissue.4407-cp311-abi3-macosx_11_0_arm64.whl
+          - image: macos-15-intel
+            whl: casadi-3.8.0.dev%2Bissue.4407-cp311-abi3-macosx_11_0_x86_64.macosx_11_0_intel.whl
+          - image: windows-2022
+            whl: casadi-3.8.0.dev%2Bissue.4407-cp311-abi3-win_amd64.whl
+    runs-on: ${{ matrix.image }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install nightly wheel + tooling
+        shell: bash
+        run: |
+          URL="https://github.com/casadi/casadi/releases/download/nightly-issue_4407/${{ matrix.whl }}"
+          mkdir -p whl; WHL=$(basename "$URL" | sed 's/%2B/+/g'); curl -fsSL -o "whl/$WHL" "$URL"
+          python -m pip install -q "whl/$WHL" numpy scipy mypy ruff
+          python -c "import casadi; print(casadi.__version__)"
+      - name: Fetch test/python files from the branch
+        shell: bash
+        run: |
+          mkdir -p test/python && cd test/python
+          for f in stubtest_mypy.ini stubtest_allowlist.txt mypy_probe.py; do curl -fsSL -o $f https://raw.githubusercontent.com/casadi/casadi/issue_4407/test/python/$f; done
+      - name: mypy against the installed stubs
+        timeout-minutes: 10
+        shell: bash
+        run: |
+          cd test/python
+          python -m mypy --no-incremental mypy_probe.py
+      - name: stubtest against the installed stubs (bash)
+        if: "!contains(matrix.image, 'windows')"
+        timeout-minutes: 10
+        shell: bash
+        run: |
+          cd test/python
+          python -X faulthandler -c "import faulthandler; faulthandler.dump_traceback_later(240, exit=True); import runpy, sys; sys.argv=['stubtest','casadi','--concise','--mypy-config-file','stubtest_mypy.ini','--allowlist','stubtest_allowlist.txt','--ignore-unused-allowlist']; runpy.run_module('mypy.stubtest', run_name='__main__')" > stubtest.log 2> stubtest.err || true
+          grep -v 'stub does not have \*args parameter "args"' stubtest.log > stubtest_rest.log || true
+          cat stubtest_rest.log; grep -v _bootstrap stubtest.err | tail -30
+          test ! -s stubtest_rest.log
+      - name: stubtest against the installed stubs (pwsh)
+        if: contains(matrix.image, 'windows')
+        timeout-minutes: 10
+        shell: pwsh
+        run: |
+          cd test/python
+          $PSNativeCommandUseErrorActionPreference = $false
+          python -m mypy.stubtest casadi --concise --mypy-config-file stubtest_mypy.ini --allowlist stubtest_allowlist.txt --ignore-unused-allowlist > stubtest.log
+          $rest = @(Get-Content stubtest.log | Where-Object { $_ -notmatch 'stub does not have \*args parameter "args"' })
+          $rest
+          if ($rest.Count -gt 0) { exit 1 }
+      - name: ruff against the installed stubs
+        timeout-minutes: 10
+        shell: bash
+        run: |
+          python -m ruff check --isolated --no-cache --target-version py39 --select F,PYI,UP037,RUF036 --ignore PYI021,PYI063 "$(python -c 'import casadi, os; print(os.path.dirname(casadi.__file__))')/casadi.pyi"
