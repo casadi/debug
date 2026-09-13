@@ -48,7 +48,7 @@ jobs:
           cd test/python
           python -X faulthandler -c "import faulthandler; faulthandler.dump_traceback_later(240, exit=True); import runpy, sys; sys.argv=['stubtest','casadi','--concise','--mypy-config-file','stubtest_mypy.ini','--allowlist','stubtest_allowlist.txt','--ignore-unused-allowlist']; runpy.run_module('mypy.stubtest', run_name='__main__')" > stubtest.log 2> stubtest.err || true
           grep -v 'stub does not have \*args parameter "args"' stubtest.log > stubtest_rest.log || true
-          cat stubtest_rest.log; grep -v _bootstrap stubtest.err | tail -30
+          cat stubtest_rest.log; (grep -v _bootstrap stubtest.err || true) | tail -30
           test ! -s stubtest_rest.log
       - name: stubtest against the installed stubs (pwsh)
         if: contains(matrix.image, 'windows')
@@ -60,7 +60,7 @@ jobs:
           python -m mypy.stubtest casadi --concise --mypy-config-file stubtest_mypy.ini --allowlist stubtest_allowlist.txt --ignore-unused-allowlist > stubtest.log
           $rest = @(Get-Content stubtest.log | Where-Object { $_ -notmatch 'stub does not have \*args parameter "args"' })
           $rest
-          if ($rest.Count -gt 0) { exit 1 }
+          if ($rest.Count -gt 0) { exit 1 } else { exit 0 }
       - name: ruff against the installed stubs
         timeout-minutes: 10
         shell: bash
