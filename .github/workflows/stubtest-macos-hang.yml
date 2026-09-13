@@ -25,9 +25,23 @@ jobs:
         run: |
           cd tp
           cat > run.py <<'PY'
-          import faulthandler, sys, runpy
-          faulthandler.dump_traceback_later(90, repeat=True, exit=False)
-          faulthandler.dump_traceback_later(420, exit=True)  # hard stop with a final dump
+          import faulthandler, sys, runpy, threading, os, time
+          import mypy.stubtest as st
+          _orig = st.silent_import_module
+          def traced(name):
+              print("IMPORT", name, file=sys.stderr, flush=True)
+              return _orig(name)
+          st.silent_import_module = traced
+          def watchdog():
+              time.sleep(75)
+              print("=== WATCHDOG sys.path:", sys.path, file=sys.stderr)
+              ns = [(k, type(getattr(m, "__path__", None)).__name__, list(getattr(m, "__path__", []) or [])[:3])
+                    for k, m in list(sys.modules.items()) if m is not None and hasattr(m, "__path__")]
+              for row in ns: print("PKG", row, file=sys.stderr)
+              sys.stderr.flush()
+              faulthandler.dump_traceback(all_threads=False)
+              os._exit(3)
+          threading.Thread(target=watchdog, daemon=True).start()
           sys.argv = ["stubtest", "casadi", "--concise", "--mypy-config-file", "stubtest_mypy.ini",
                       "--allowlist", "stubtest_allowlist.txt", "--ignore-unused-allowlist"]
           runpy.run_module("mypy.stubtest", run_name="__main__")
@@ -35,5 +49,5 @@ jobs:
           set +e
           time python -X faulthandler run.py > stubtest.log 2> stubtest.err
           echo "rc=$?"
-          echo "== err (faulthandler dumps) =="; tail -80 stubtest.err
+          echo "== err =="; grep -v "_bootstrap" stubtest.err | tail -120
           echo "== log =="; grep -v 'stub does not have \*args parameter "args"' stubtest.log | head -40
