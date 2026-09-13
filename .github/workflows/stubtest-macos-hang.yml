@@ -1,0 +1,38 @@
+name: stubtest hang on macos (issue_4407)
+
+on: [push, workflow_dispatch]
+
+jobs:
+  diag:
+    runs-on: macos-14
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4.1.1
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install nightly wheel + tooling
+        run: |
+          URL='https://github.com/casadi/casadi/releases/download/nightly-issue_4407/casadi-3.8.0.dev%2Bissue.4407-cp311-abi3-macosx_11_0_arm64.whl'
+          mkdir -p /tmp/whl; WHL=$(basename "$URL" | sed 's/%2B/+/g'); curl -fsSL -o "/tmp/whl/$WHL" "$URL"
+          python -m pip install -q "/tmp/whl/$WHL" numpy scipy mypy
+          python -c "import casadi, mypy; print(casadi.__version__, mypy.__file__)"
+      - name: Fetch the test config files from the branch
+        run: |
+          mkdir -p tp && cd tp
+          for f in stubtest_mypy.ini stubtest_allowlist.txt; do curl -fsSL -o $f https://raw.githubusercontent.com/casadi/casadi/issue_4407/test/python/$f; done
+      - name: stubtest with a faulthandler dump after 120 s
+        run: |
+          cd tp
+          cat > run.py <<'PY'
+          import faulthandler, sys, runpy
+          faulthandler.dump_traceback_later(120, repeat=True, exit=False)
+          sys.argv = ["stubtest", "casadi", "--concise", "--mypy-config-file", "stubtest_mypy.ini",
+                      "--allowlist", "stubtest_allowlist.txt", "--ignore-unused-allowlist"]
+          runpy.run_module("mypy.stubtest", run_name="__main__")
+          PY
+          set +e
+          time timeout 600 python -X faulthandler run.py > stubtest.log 2> stubtest.err
+          echo "rc=$?"
+          echo "== err (faulthandler dumps) =="; tail -80 stubtest.err
+          echo "== log =="; grep -v 'stub does not have \*args parameter "args"' stubtest.log | head -40
