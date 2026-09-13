@@ -25,26 +25,27 @@ jobs:
         run: |
           cd tp
           cat > run.py <<'PY'
-          import faulthandler, sys, runpy, threading, os, time
+          import faulthandler, sys, threading, os, time
           import mypy.stubtest as st
+          err = sys.__stderr__
           _orig = st.silent_import_module
           def traced(name):
-              print("IMPORT", name, file=sys.stderr, flush=True)
+              print("IMPORT", name, file=err, flush=True)
               return _orig(name)
           st.silent_import_module = traced
           def watchdog():
               time.sleep(75)
-              print("=== WATCHDOG sys.path:", sys.path, file=sys.stderr)
-              ns = [(k, type(getattr(m, "__path__", None)).__name__, list(getattr(m, "__path__", []) or [])[:3])
-                    for k, m in list(sys.modules.items()) if m is not None and hasattr(m, "__path__")]
-              for row in ns: print("PKG", row, file=sys.stderr)
-              sys.stderr.flush()
-              faulthandler.dump_traceback(all_threads=False)
+              print("=== WATCHDOG sys.path:", sys.path, file=err, flush=True)
+              for k, m in list(sys.modules.items()):
+                  p = getattr(m, "__path__", None)
+                  if m is not None and p is not None and not isinstance(p, list):
+                      print("NSPKG", k, type(p).__name__, list(p)[:3] if len(list(p)) < 5 else "?", file=err, flush=True)
+              faulthandler.dump_traceback(file=err, all_threads=False)
               os._exit(3)
           threading.Thread(target=watchdog, daemon=True).start()
           sys.argv = ["stubtest", "casadi", "--concise", "--mypy-config-file", "stubtest_mypy.ini",
                       "--allowlist", "stubtest_allowlist.txt", "--ignore-unused-allowlist"]
-          runpy.run_module("mypy.stubtest", run_name="__main__")
+          sys.exit(st.main())
           PY
           set +e
           time python -X faulthandler run.py > stubtest.log 2> stubtest.err
