@@ -34,6 +34,9 @@ jobs:
         run: |
           mkdir -p test/python && cd test/python
           for f in stubtest_mypy.ini stubtest_allowlist.txt mypy_probe.py; do curl -fsSL -o $f https://raw.githubusercontent.com/casadi/casadi/issue_4407/test/python/$f; done
+          # hypothesis under test: real modules only (no namespace-package walk of include/)
+          grep -q namespace_packages stubtest_mypy.ini || sed -i.bak 's/^ignore_missing_imports = True$/ignore_missing_imports = True\nnamespace_packages = False/' stubtest_mypy.ini
+          cat stubtest_mypy.ini
       - name: mypy against the installed stubs
         timeout-minutes: 10
         shell: bash
