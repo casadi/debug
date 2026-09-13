@@ -26,13 +26,14 @@ jobs:
           cd tp
           cat > run.py <<'PY'
           import faulthandler, sys, runpy
-          faulthandler.dump_traceback_later(120, repeat=True, exit=False)
+          faulthandler.dump_traceback_later(90, repeat=True, exit=False)
+          faulthandler.dump_traceback_later(420, exit=True)  # hard stop with a final dump
           sys.argv = ["stubtest", "casadi", "--concise", "--mypy-config-file", "stubtest_mypy.ini",
                       "--allowlist", "stubtest_allowlist.txt", "--ignore-unused-allowlist"]
           runpy.run_module("mypy.stubtest", run_name="__main__")
           PY
           set +e
-          time timeout 600 python -X faulthandler run.py > stubtest.log 2> stubtest.err
+          time python -X faulthandler run.py > stubtest.log 2> stubtest.err
           echo "rc=$?"
           echo "== err (faulthandler dumps) =="; tail -80 stubtest.err
           echo "== log =="; grep -v 'stub does not have \*args parameter "args"' stubtest.log | head -40
