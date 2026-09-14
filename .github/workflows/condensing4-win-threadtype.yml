@@ -1,0 +1,58 @@
+name: condensing4 test_condense_general codegen on Windows (thread type A/B)
+
+# casadi/casadi test-python-long (312, windows-2022) on ad9073f575 failed
+# test_condense_general: MSVC "Cannot open include file: 'pthread.h'" because
+# the test codegens thread_safe=True without CASADI_THREAD_TYPE. Fix landed in
+# 70262bee62 (test file only; the shipped wheel is unaffected). A/B: run the
+# pre-fix and post-fix ocp.py against the same nightly-condensing4 wheel.
+
+on: [push, workflow_dispatch]
+
+jobs:
+  diag:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: jgillis/msvc-dev-cmd@codex/bump-runtime-node24
+
+      - name: Get casadi test files (condensing4 HEAD + pre-fix ocp.py)
+        shell: bash
+        run: |
+          git clone --depth 50 --branch condensing4 https://github.com/casadi/casadi.git src
+          cd src && git log --oneline -3
+          git show 1cc01a1c03:test/python/ocp.py > test/python/ocp_prefix.py
+          diff test/python/ocp_prefix.py test/python/ocp.py || true
+
+      - name: Download nightly-condensing4 win_amd64 wheel
+        shell: bash
+        run: |
+          curl -sSL -o casadi.whl \
+            "https://github.com/casadi/casadi/releases/download/nightly-condensing4/casadi-3.8.1.dev%2Bcondensing4-cp311-abi3-win_amd64.whl"
+          mkdir -p ws && unzip -q casadi.whl -d ws
+          ls ws/casadi | head -5
+
+      - name: Install deps
+        shell: bash
+        run: python -m pip install --upgrade pip numpy scipy pandas looseversion
+
+      - name: A/B test_condense_general (--run_slow => real cl.exe codegen)
+        shell: bash
+        env:
+          PYTHONPATH: ${{ github.workspace }}/ws
+        run: |
+          cd src/test/python
+          python -c "import casadi; print('casadi', casadi.__version__)"
+          set +e
+          for f in ocp_prefix ocp; do
+            echo "############ $f.py ############"
+            python $f.py --run_slow OCPtests.test_condense_general OCPtests.test_condense_failed_solve > out_$f.txt 2>&1; rc=$?
+            echo "exit=$rc  verdict: $(grep -aE '^OK$|^OK \(|^FAILED' out_$f.txt | tail -1)"
+            grep -a "compile library" out_$f.txt | head -2 | cut -c1-160
+            grep -aE "C1083|error C|fatal error|Cannot load shared library" out_$f.txt | head -5
+            grep -anE "^(ERROR|FAIL): test" out_$f.txt
+          done
+          echo "expect: ocp_prefix FAILED (C1083 pthread.h), ocp OK"
+          grep -aqE '^OK' out_ocp.txt
