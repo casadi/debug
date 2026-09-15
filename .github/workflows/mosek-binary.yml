@@ -9,7 +9,12 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - run: pip install numpy
+      - uses: actions/checkout@v4
+        with:
+          repository: casadi/casadi
+          ref: 4f50f44b5a0abd712b5289b083d959c25a78cd7d
+          path: src
+      - run: pip install numpy scipy
       - name: Download exact CI binaries
         env:
           GH_TOKEN: ${{ github.token }}
@@ -31,6 +36,9 @@ jobs:
           repo: jgillis/restricted
           file: mosek.lic
           token: ${{ secrets.JGILLIS_RESTRICTED }}
+      - uses: casadi/commercial_solvers@6803393f6e52d00b74e957a58bbbbdac771ecef6
+        with:
+          token: ${{ secrets.JGILLIS_RESTRICTED }}
       - name: Diagnose native and generated models
         run: |
           export MOSEKDIR="$PWD/mosek/11.1/tools/platform/linux64x86"
@@ -38,12 +46,16 @@ jobs:
           export LD_LIBRARY_PATH="$MOSEKDIR/bin"
           export PYTHONPATH="$PWD/package"
           gcc -shared -fPIC trace_mosek.c -I"$MOSEKDIR/h" -L"$MOSEKDIR/bin" -Wl,--no-as-needed -lmosek64 -ldl -o trace_mosek.so
-          LD_PRELOAD="$PWD/trace_mosek.so" python mosek_binary.py | tee results.log
+          python mosek_binary.py | tee results.log
+          cd src/test/python
+          PYTHONPATH="$GITHUB_WORKSPACE/package" python conic.py ConicTests.test_SOCP ConicTests.test_badscaling ConicTests.test_binary --run_slow > "$GITHUB_WORKSPACE/conic-results.log" 2>&1
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: mosek-diagnostics
           path: |
             results.log
+            conic-results.log
+            src/test/python/codegen_*.c
             model-*.ptf
             solver.c
