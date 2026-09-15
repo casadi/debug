@@ -1,0 +1,45 @@
+name: MOSEK binary codegen diagnosis
+on:
+  workflow_dispatch:
+jobs:
+  diagnose:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install numpy
+      - name: Download exact CI binaries
+        env:
+          GH_TOKEN: ${{ secrets.JGILLIS_RESTRICTED }}
+        run: |
+          gh api repos/casadi/casadi/actions/artifacts/10418970904/zip > wheel.zip
+          python - <<'PY'
+          import io,zipfile
+          with zipfile.ZipFile('wheel.zip') as z:
+            with zipfile.ZipFile(io.BytesIO(z.read(z.namelist()[0]))) as w: w.extractall('package')
+          PY
+          gh api -H 'Accept: application/octet-stream' repos/jgillis/restricted/releases/assets/412648558 > mosek.tar.bz2
+          tar -xf mosek.tar.bz2
+      - uses: jgillis/fetch-gh-release-asset@codex/bump-runtime-node24
+        with:
+          repo: jgillis/restricted
+          file: mosek.lic
+          token: ${{ secrets.JGILLIS_RESTRICTED }}
+      - name: Diagnose native and generated models
+        run: |
+          export MOSEKDIR="$PWD/mosek/11.1/tools/platform/linux64x86"
+          export MOSEKLM_LICENSE_FILE="$PWD/mosek.lic"
+          export LD_LIBRARY_PATH="$MOSEKDIR/bin"
+          export PYTHONPATH="$PWD/package"
+          gcc -shared -fPIC trace_mosek.c -I"$MOSEKDIR/h" -L"$MOSEKDIR/bin" -Wl,--no-as-needed -lmosek64 -ldl -o trace_mosek.so
+          LD_PRELOAD="$PWD/trace_mosek.so" python mosek_binary.py | tee results.log
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: mosek-diagnostics
+          path: |
+            results.log
+            model-*.ptf
+            solver.c
