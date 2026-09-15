@@ -12,7 +12,7 @@ jobs:
       - run: pip install numpy
       - name: Download exact CI binaries
         env:
-          GH_TOKEN: ${{ secrets.JGILLIS_RESTRICTED }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           gh api repos/casadi/casadi/actions/artifacts/10418970904/zip > wheel.zip
           python - <<'PY'
@@ -20,8 +20,12 @@ jobs:
           with zipfile.ZipFile('wheel.zip') as z:
             with zipfile.ZipFile(io.BytesIO(z.read(z.namelist()[0]))) as w: w.extractall('package')
           PY
-          gh api -H 'Accept: application/octet-stream' repos/jgillis/restricted/releases/assets/412648558 > mosek.tar.bz2
-          tar -xf mosek.tar.bz2
+      - uses: jgillis/fetch-gh-release-asset@codex/bump-runtime-node24
+        with:
+          repo: jgillis/restricted
+          file: mosektoolslinux64x86.tar.bz2
+          token: ${{ secrets.JGILLIS_RESTRICTED }}
+      - run: tar -xf mosektoolslinux64x86.tar.bz2
       - uses: jgillis/fetch-gh-release-asset@codex/bump-runtime-node24
         with:
           repo: jgillis/restricted
