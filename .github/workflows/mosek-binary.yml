@@ -41,9 +41,7 @@ jobs:
           token: ${{ secrets.JGILLIS_RESTRICTED }}
       - name: Diagnose native and generated models
         run: |
-          export MOSEKDIR="$PWD/mosek/11.1/tools/platform/linux64x86"
-          export MOSEKLM_LICENSE_FILE="$PWD/mosek.lic"
-          export LD_LIBRARY_PATH="$MOSEKDIR/bin"
+          set -euo pipefail
           export PYTHONPATH="$PWD/package"
           gcc -shared -fPIC trace_mosek.c -I"$MOSEKDIR/h" -L"$MOSEKDIR/bin" -Wl,--no-as-needed -lmosek64 -ldl -o trace_mosek.so
           python mosek_binary.py | tee results.log
