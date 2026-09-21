@@ -14,7 +14,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        fatrop_ref: [v1.1.9, msvc-nominmax]
+        fatrop_ref: [msvc-nominmax]
         shared: [ON, OFF]
     steps:
       - uses: jgillis/msvc-dev-cmd@codex/bump-runtime-node24
