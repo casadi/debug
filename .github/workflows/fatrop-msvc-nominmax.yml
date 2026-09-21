@@ -1,0 +1,46 @@
+name: fatrop MSVC build A/B (NOMINMAX fix)
+
+# vcpkg #54019 CI: fatrop v1.1.9 fails on every MSVC triplet with
+# C2988/C2059 at vector.hpp:188/292 -- Windows.h min/max macros reaching
+# fatrop through blasfeo_timing.h. Build blasfeo 0.1.4.3 (GENERIC) + fatrop
+# with MSVC twice: v1.1.9 (expected to fail) and jgillis/fatrop@msvc-nominmax
+# (expected to pass), static and shared.
+
+on: [push, workflow_dispatch]
+
+jobs:
+  build:
+    runs-on: windows-2022
+    strategy:
+      fail-fast: false
+      matrix:
+        fatrop_ref: [v1.1.9, msvc-nominmax]
+        shared: [ON, OFF]
+    steps:
+      - uses: jgillis/msvc-dev-cmd@codex/bump-runtime-node24
+
+      - name: blasfeo 0.1.4.3 GENERIC
+        shell: bash
+        run: |
+          git clone -q --depth 1 --branch 0.1.4.3 https://github.com/giaf/blasfeo.git blasfeo
+          cmake -S blasfeo -B blasfeo/build -G Ninja -DCMAKE_BUILD_TYPE=Release \
+            -DTARGET=GENERIC -DBUILD_SHARED_LIBS=${{ matrix.shared }} \
+            -DBLASFEO_EXAMPLES=OFF -DBLASFEO_TESTING=OFF -DBLASFEO_BENCHMARKS=OFF \
+            -DCMAKE_INSTALL_PREFIX="$PWD/prefix"
+          cmake --build blasfeo/build --target install
+          ls prefix/lib prefix/share/cmake/blasfeo
+
+      - name: fatrop ${{ matrix.fatrop_ref }}
+        shell: bash
+        run: |
+          case "${{ matrix.fatrop_ref }}" in
+            v1.1.9) repo=https://github.com/meco-group/fatrop.git ;;
+            *)      repo=https://github.com/jgillis/fatrop.git ;;
+          esac
+          git clone -q --depth 1 --branch ${{ matrix.fatrop_ref }} $repo fatrop
+          cmake -S fatrop -B fatrop/build -G Ninja -DCMAKE_BUILD_TYPE=Release \
+            -DBUILD_SHARED_LIBS=${{ matrix.shared }} -DWITH_BUILD_BLASFEO=OFF \
+            -DBUILD_TESTS=OFF -DBUILD_EXAMPLES=OFF -DBUILD_WITH_C_INTERFACE=ON \
+            -DCMAKE_PREFIX_PATH="$PWD/prefix" -DCMAKE_INSTALL_PREFIX="$PWD/prefix"
+          cmake --build fatrop/build --target install
+          ls prefix/lib
