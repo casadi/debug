@@ -1,0 +1,93 @@
+name: macos blasfeo giaf fix under Guard Malloc (fatrop/hpipm tests)
+
+# giaf/blasfeo#216 (alloc guard) came from the macos-14 alltests --run_slow
+# SIGSEGV (GENERIC lib4 kernel OOB read, see macos-fatrop-blasfeo-ab.yml).
+# giaf answered with kernel-side fix d3da74db. Test it WITHOUT our guard.
+# Base = casadi 3.8.1 wheel (guarded blasfeo); bundled libblasfeo swapped for:
+#   stock        : wheel as shipped (fb39d77 + guard)          -> control, expect pass
+#   pin_noguard  : fb39d77 without guard                      -> expect SIGSEGV
+#   parent       : 60493284 (d3da74db^) without guard         -> expect SIGSEGV
+#   fix          : d3da74db without guard                     -> the question
+
+on: [workflow_dispatch]
+
+jobs:
+  ab:
+    runs-on: macos-14
+    timeout-minutes: 300
+    strategy:
+      fail-fast: false
+      matrix:
+        variant: [stock, pin_noguard, parent, fix]
+    steps:
+      - name: Polyglot mac libMad -> /usr/local/lib
+        run: |
+          set -eux
+          curl -fsSL -o /tmp/lm.zip "https://github.com/casadi/polyglot/releases/download/evergreen/libMad-osx-arm64.zip"
+          mkdir -p /tmp/lm && unzip -q /tmp/lm.zip -d /tmp/lm
+          sudo cp -R /tmp/lm/lib/ /usr/local/lib/
+          [ -d /tmp/lm/share ] && sudo cp -R /tmp/lm/share/ /usr/local/share/ || true
+
+      - name: Install casadi 3.8.1 + test sources
+        run: |
+          set -eux
+          python3 -m venv /tmp/v && . /tmp/v/bin/activate
+          pip install -q --upgrade pip numpy scipy pandas looseversion
+          pip install -q "casadi==3.8.1"
+          curl -fsSL -o /tmp/src.tgz "https://github.com/casadi/casadi/archive/refs/tags/3.8.1.tar.gz"
+          mkdir -p /tmp/src && tar -xzf /tmp/src.tgz -C /tmp/src --strip-components=1
+          cd /tmp/src/test/python
+          curl -fsSL -O https://github.com/casadi/testbot/releases/download/perpetual/serialize_3.5.5.zip && unzip -o serialize_3.5.5.zip >/dev/null || true
+          (cd ../data && for f in VanDerPol2.fmu VanDerPol3.fmu vdp.fmu cstr.fmu car_t_fmu2.fmu; do curl -fsSL -O "https://github.com/casadi/testbot/releases/download/perpetual/$f" || true; done)
+          CA=$(python -c "import casadi,os;print(os.path.dirname(casadi.__file__))")
+          echo "CA=$CA" >> $GITHUB_ENV
+          ls -la $CA/libblasfeo*
+          otool -L $CA/libfatrop.dylib | grep -i blasfeo
+
+      - name: Build + swap blasfeo (${{ matrix.variant }})
+        if: matrix.variant != 'stock'
+        run: |
+          set -eux
+          case "${{ matrix.variant }}" in
+            pin_noguard) REF=fb39d77a8c2d87805d38d41635a1402b5bcb9e18 ;;
+            parent)      REF=60493284 ;;
+            fix)         REF=d3da74db6d16d03ee376c6e5cdaa8b6f97436197 ;;
+          esac
+          git clone -q https://github.com/giaf/blasfeo.git /tmp/blasfeo
+          git -C /tmp/blasfeo checkout -q $REF
+          git -C /tmp/blasfeo log --oneline -1
+          grep -n 'MEMSIZE_.*(m, n)\|size = ' /tmp/blasfeo/auxiliary/x_aux_ext_dep.c | head
+          export MACOSX_DEPLOYMENT_TARGET=11.0
+          cmake -S /tmp/blasfeo -B /tmp/bb -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_C_FLAGS="-std=c99 -Wno-implicit-function-declaration -Wno-incompatible-pointer-types" \
+            -DTARGET=GENERIC -DBUILD_SHARED_LIBS=ON -DEXT_DEP=OFF -DBLASFEO_EXAMPLES=OFF \
+            -DCMAKE_INSTALL_PREFIX=/tmp/bi > /dev/null
+          cmake --build /tmp/bb -j4 > /dev/null
+          cmake --install /tmp/bb > /dev/null
+          ls -la /tmp/bi/lib
+          NEW=$(ls /tmp/bi/lib/libblasfeo.*.*.dylib 2>/dev/null | head -1 || true)
+          [ -n "$NEW" ] || NEW=$(readlink -f /tmp/bi/lib/libblasfeo.dylib)
+          for f in $CA/libblasfeo*.dylib; do cp -f "$NEW" "$f"; done
+          nm -gU $CA/libblasfeo.0.dylib | grep -c blasfeo_allocate_dvec
+          shasum $CA/libblasfeo*.dylib "$NEW"
+
+      - name: fatrop/hpipm tests under Guard Malloc
+        run: |
+          set +e
+          . /tmp/v/bin/activate
+          shasum $CA/libblasfeo*.dylib
+          cd /tmp/src/test/python
+          export PYTHONUNBUFFERED=1 PYTHONFAULTHANDLER=1 JULIA_CUDA_USE_COMPAT=false
+          for t in "ocp" "nlp -k fatrop" "conic -k fatrop -k hpipm"; do
+            DYLD_INSERT_LIBRARIES=/usr/lib/libgmalloc.dylib python -u -X faulthandler -m unittest -v $t >> /tmp/log.txt 2>&1
+            rc=$?
+            echo ">>> VERDICT variant=${{ matrix.variant }} suite='$t' rc=$rc (138=SIGBUS 139=SIGSEGV)" | tee -a /tmp/log.txt
+          done
+          grep -n -B5 -A30 'Fatal Python error' /tmp/log.txt | head -120
+          grep -E '^Ran |^OK|^FAILED' /tmp/log.txt
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: gm-log-${{ matrix.variant }}
+          path: /tmp/log.txt
