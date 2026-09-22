@@ -78,13 +78,13 @@ jobs:
           shasum $CA/libblasfeo*.dylib
           cd /tmp/src/test/python
           export PYTHONUNBUFFERED=1 PYTHONFAULTHANDLER=1 JULIA_CUDA_USE_COMPAT=false
-          for t in "ocp" "nlp -k fatrop" "conic -k fatrop -k hpipm"; do
-            DYLD_INSERT_LIBRARIES=/usr/lib/libgmalloc.dylib python -u -X faulthandler -m unittest -v $t >> /tmp/log.txt 2>&1
+          for t in "ocp.py" "nlp.py -- -k fatrop" "conic.py -- -k fatrop -k hpipm"; do
+            DYLD_INSERT_LIBRARIES=/usr/lib/libgmalloc.dylib python -u -X faulthandler $t >> /tmp/log.txt 2>&1
             rc=$?
             echo ">>> VERDICT variant=${{ matrix.variant }} suite='$t' rc=$rc (138=SIGBUS 139=SIGSEGV)" | tee -a /tmp/log.txt
           done
           grep -n -B5 -A30 'Fatal Python error' /tmp/log.txt | head -120
-          grep -E '^Ran |^OK|^FAILED' /tmp/log.txt
+          grep -E '^Ran |^OK|^FAILED' /tmp/log.txt; true
 
       - uses: actions/upload-artifact@v4
         if: always()
