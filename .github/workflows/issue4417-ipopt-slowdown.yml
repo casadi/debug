@@ -1,4 +1,4 @@
-name: issue 4417 - Ipopt/MUMPS wall time 3.8.0 vs 3.8.1 (OpenBLAS 0.3.21 vs 0.3.24)
+name: issue 4417 - Ipopt/MUMPS wall time 3.8.0 vs 3.8.1 vs nightly-main (OpenBLAS 0.3.24.mod)
 
 on: [push, workflow_dispatch]
 
@@ -8,7 +8,7 @@ jobs:
       fail-fast: false
       matrix:
         image: [windows-2022, ubuntu-24.04]
-        casadi: ["3.8.0", "3.8.1"]
+        casadi: ["3.8.0", "3.8.1", "nightly-main"]
     runs-on: ${{ matrix.image }}
     timeout-minutes: 30
     steps:
@@ -18,7 +18,12 @@ jobs:
           python-version: "3.12"
       - shell: bash
         run: |
-          python -m pip install -q numpy "casadi==${{ matrix.casadi }}"
+          if [ "${{ matrix.casadi }}" = nightly-main ]; then
+            case "${{ runner.os }}" in Windows) plat=win_amd64;; *) plat=manylinux2014_x86_64;; esac
+            python -m pip install -q numpy "https://github.com/casadi/casadi/releases/download/nightly-main/casadi-3.8.1.dev+main-cp311-abi3-$plat.whl"
+          else
+            python -m pip install -q numpy "casadi==${{ matrix.casadi }}"
+          fi
           python -c "import casadi; print(casadi.__version__)"
       - name: default threads
         shell: bash
