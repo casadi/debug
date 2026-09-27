@@ -1,0 +1,28 @@
+name: codegen_stats4 - macOS C API opens the loaded libcasadi (test_c_api)
+
+on: [push, workflow_dispatch]
+
+jobs:
+  mac:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runs-on: macos-15-intel
+            whl: casadi-3.8.1.dev%2Bcodegen.stats4-cp311-abi3-macosx_11_0_x86_64.macosx_11_0_intel.whl
+          - runs-on: macos-14
+            whl: casadi-3.8.1.dev%2Bcodegen.stats4-cp311-abi3-macosx_11_0_arm64.whl
+    runs-on: ${{ matrix.runs-on }}
+    steps:
+      - uses: actions/checkout@v4.1.1
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install the branch wheel
+        run: |
+          URL=https://github.com/casadi/casadi/releases/download/nightly-codegen_stats4/${{ matrix.whl }}
+          WHL=$(basename "$URL" | sed 's/%2B/+/g')
+          mkdir -p /tmp/whl && curl -fsSL -o "/tmp/whl/$WHL" "$URL"
+          python -m pip install -q numpy "/tmp/whl/$WHL"
+      - name: C API through ctypes
+        run: python scripts/c_api_loaded_lib.py
