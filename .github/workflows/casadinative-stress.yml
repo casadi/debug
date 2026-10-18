@@ -1,0 +1,23 @@
+name: casadinative-stress
+on:
+  push:
+    paths: ['.github/workflows/casadinative-stress.yml', 'casadinative/**']
+  workflow_dispatch:
+jobs:
+  stress:
+    name: ${{ matrix.os }} julia ${{ matrix.version }} ${{ matrix.mode }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest]
+        version: ['1.12', '1.13']
+        mode: [default, nofinal]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: julia-actions/setup-julia@v2
+        with:
+          version: ${{ matrix.version }}
+      - run: git clone --depth 1 https://github.com/casadi/CasADiNative.jl cn
+      - run: julia --project=env -e 'using Pkg; Pkg.develop(path="cn"); Pkg.add("Test"); Pkg.precompile()'
+      - run: bash casadinative/stress.sh 10 ${{ matrix.mode }}
