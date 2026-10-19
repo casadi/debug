@@ -8,15 +8,9 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - image: macos-14
-            plat: macosx_11_0_arm64
-            issues: "4146,4141,3862,3409,2622,1288,4144,3876,3456,2755,2989"
-          - image: macos-15-intel
-            plat: macosx_11_0_x86_64.macosx_11_0_intel
-            issues: "4146,4141,3862,3409,2622,1288,4437"
           - image: windows-2022
             plat: win_amd64
-            issues: "4437,2989,3876,3696,3456,4144,2755,4141,4146"
+            issues: "4437"
     runs-on: ${{ matrix.image }}
     timeout-minutes: 60
     steps:

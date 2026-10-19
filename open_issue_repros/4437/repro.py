@@ -38,12 +38,14 @@ class X87CW(ca.Callback):
         return [ca.DM(get_cw())]
 
 print("casadi", ca.__version__, "initial cw: 0x%X" % get_cw())
-set_cw(0x27F)
 f = X87CW()
-direct = int(f(0))
-r_ser = [int(v) for v in ca.DM(f.map(2, "serial")(ca.DM.zeros(1, 2))).full().ravel()]
-r_thr = [int(v) for v in ca.DM(f.map(2, "thread", 2)(ca.DM.zeros(1, 2))).full().ravel()]
-print("direct: 0x%X" % direct)
-print("serial:", ["0x%X" % v for v in r_ser])
-print("thread:", ["0x%X" % v for v in r_thr])
-print("BUG PRESENT" if any(v != direct for v in r_thr) else "BUG ABSENT")
+bad = False
+for cw in (0x27F, 0x37F):
+    set_cw(cw)
+    direct = int(f(0))
+    r_ser = [int(v) for v in ca.DM(f.map(2, "serial")(ca.DM.zeros(1, 2))).full().ravel()]
+    r_thr = [int(v) for v in ca.DM(f.map(2, "thread", 2)(ca.DM.zeros(1, 2))).full().ravel()]
+    print("caller 0x%X direct: 0x%X" % (cw, direct), "serial:", ["0x%X" % v for v in r_ser], "thread:", ["0x%X" % v for v in r_thr])
+    bad = bad or any(v != direct for v in r_thr)
+set_cw(0x27F)
+print("BUG PRESENT" if bad else "BUG ABSENT")
