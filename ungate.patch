@@ -1,75 +1,108 @@
 diff -ru a/ad.py b/ad.py
 --- a/test/python/ad.py	2026-11-13 00:31:16.826113780 +0100
-+++ b/test/python/ad.py	2026-11-13 00:31:25.426171570 +0100
-@@ -661,7 +661,7 @@
++++ b/test/python/ad.py	2026-11-13 00:38:42.240108452 +0100
+@@ -35,6 +35,10 @@
+ 
+ warnings.filterwarnings("ignore",category=DeprecationWarning)
+ 
++def cg_digits(out):
++  # MSVC's pow differs from glibc's in the last bit (#3040)
++  return codegen_check_digits-1 if "pow" in str(out) and os.name=='nt' else codegen_check_digits
++
+ class ADtests(casadiTestCase):
+ 
+   def setUp(self):
+@@ -661,10 +665,7 @@
                self.checkarray(fun_out[1],funsx_out[1])
              else:
                funsx_ad = None
 -            if "pow" in str(out) and os.name=='nt':
-+            if False and "pow" in str(out) and os.name=='nt':
-               pass # Known bug #3038
-             else:
-               self.check_codegen(fun,inputs=values,std=std,digits=codegen_check_digits)
-@@ -721,7 +721,7 @@
+-              pass # Known bug #3038
+-            else:
+-              self.check_codegen(fun,inputs=values,std=std,digits=codegen_check_digits)
++            self.check_codegen(fun,inputs=values,std=std,digits=cg_digits(out))
+             self.check_serialize(fun,inputs=values)
+ 
+             J_ = fun_out[1]
+@@ -721,10 +722,7 @@
                    if sym is ca.MX.sym:
                        self.check_eval_mx([ca.vvcat(e) for e in fwdsens])
                        self.check_eval_mx([ca.vvcat(e) for e in adjsens])
 -                  if "pow" in str(out) and os.name=='nt':
-+                  if False and "pow" in str(out) and os.name=='nt':
-                     pass # Known bug #3038
-                   else:
-                     self.check_codegen(vf,inputs=vf_in,std=std,digits=codegen_check_digits)
-@@ -750,7 +750,7 @@
+-                    pass # Known bug #3038
+-                  else:
+-                    self.check_codegen(vf,inputs=vf_in,std=std,digits=codegen_check_digits)
++                  self.check_codegen(vf,inputs=vf_in,std=std,digits=cg_digits(out))
+                   self.check_serialize(vf,inputs=vf_in)
+ 
+                   offset = len(res)
+@@ -750,10 +748,7 @@
                      vf_in.append(ca.DM(vf.sparsity_in(i),random.random(vf.nnz_in(i))))
  
                    vf_out = vf.call(vf_in)
 -                  if "pow" in str(out) and os.name=='nt':
-+                  if False and "pow" in str(out) and os.name=='nt':
-                     pass # Known bug #3038
-                   else:
-                     self.check_codegen(vf,inputs=vf_in,std=std,digits=codegen_check_digits)
-@@ -791,7 +791,7 @@
+-                    pass # Known bug #3038
+-                  else:
+-                    self.check_codegen(vf,inputs=vf_in,std=std,digits=codegen_check_digits)
++                  self.check_codegen(vf,inputs=vf_in,std=std,digits=cg_digits(out))
+                   self.check_serialize(vf,inputs=vf_in)
+                   storagekey = (spmod,spmod2)
+                   if not(storagekey in storage):
+@@ -791,10 +786,7 @@
                        vf2_in.append(ca.DM(vf2.sparsity_in(i),random.random(vf2.nnz_in(i))))
  
                      vf2_out = vf2.call(vf2_in)
 -                    if "pow" in str(out) and os.name=='nt':
-+                    if False and "pow" in str(out) and os.name=='nt':
-                       pass # Known bug #3038
-                     else:
-                       self.check_codegen(vf2,inputs=vf2_in,std=std,digits=codegen_check_digits)
-@@ -819,7 +819,7 @@
+-                      pass # Known bug #3038
+-                    else:
+-                      self.check_codegen(vf2,inputs=vf2_in,std=std,digits=codegen_check_digits)
++                    self.check_codegen(vf2,inputs=vf2_in,std=std,digits=cg_digits(out))
+                     self.check_serialize(vf2,inputs=vf2_in)
+                     storagekey = (spmod,spmod2)
+                     if not(storagekey in storage2):
+@@ -819,10 +811,7 @@
                  Jf = jacobian_old(f, 0, 0)
                  Jf_out = Jf.call(values)
  
 -                if "pow" in str(out) and os.name=='nt':
-+                if False and "pow" in str(out) and os.name=='nt':
-                   pass # Known bug #3038
-                 else:
-                   self.check_codegen(Jf,inputs=values,std=std,digits=codegen_check_digits)
-@@ -845,7 +845,7 @@
+-                  pass # Known bug #3038
+-                else:
+-                  self.check_codegen(Jf,inputs=values,std=std,digits=codegen_check_digits)
++                self.check_codegen(Jf,inputs=values,std=std,digits=cg_digits(out))
+                 self.check_serialize(Jf,inputs=values)
+                 self.checkarray(Jf_out[0],J_)
+                 self.checkarray(ca.DM.ones(Jf.sparsity_out(0)),ca.DM.ones(J_.sparsity()),str(out)+str(mode))
+@@ -845,10 +834,7 @@
  
                  Hf = hessian_old(f, 0, 0)
                  Hf_out = Hf.call(values)
 -                if "pow" in str(out) and os.name=='nt':
-+                if False and "pow" in str(out) and os.name=='nt':
-                   pass # Known bug #3038
-                 else:
-                   self.check_codegen(Hf,inputs=values,std=std,digits=codegen_check_digits)
+-                  pass # Known bug #3038
+-                else:
+-                  self.check_codegen(Hf,inputs=values,std=std,digits=codegen_check_digits)
++                self.check_codegen(Hf,inputs=values,std=std,digits=cg_digits(out))
+                 self.check_serialize(Hf,inputs=values)
+                 if H_ is None:
+                   H_ = Hf_out[0]
 diff -ru a/conic.py b/conic.py
 --- a/test/python/conic.py	2026-11-13 00:31:16.833113827 +0100
-+++ b/test/python/conic.py	2026-11-13 00:31:25.426171570 +0100
-@@ -975,7 +975,7 @@
++++ b/test/python/conic.py	2026-11-13 00:38:42.241108459 +0100
+@@ -974,11 +974,7 @@
+       solver_in["lba"]=LBA
        solver_in["uba"]=UBA
  
-       # Known bug #3038
+-      # Known bug #3038
 -      if conic=="superscs" and platform.system()=="Darwin":
-+      if False:
-         pass
-       else:
-         self.check_serialize(solver,solver_in)
+-        pass
+-      else:
+-        self.check_serialize(solver,solver_in)
++      self.check_serialize(solver,solver_in)
+       solver_out = solver(**solver_in)
+ 
+       self.checkarray(solver_out["x"],ca.DM([0.5,1.5]),str(conic),digits=max(1,5-less_digits))
 diff -ru a/function.py b/function.py
 --- a/test/python/function.py	2026-11-13 00:31:16.831113814 +0100
-+++ b/test/python/function.py	2026-11-13 00:31:25.426171570 +0100
++++ b/test/python/function.py	2026-11-13 00:38:42.241108459 +0100
 @@ -3648,7 +3648,6 @@
  
    def test_jit_serialize(self):
@@ -78,39 +111,56 @@ diff -ru a/function.py b/function.py
  
      def test_cases(jit_serialize):
        opts = {"jit":True, "compiler": "shell", "jit_options": {"verbose":True}, "verbose":False, "jit_serialize": jit_serialize}
-@@ -3705,7 +3704,7 @@
+@@ -3703,11 +3702,11 @@
  
-       f = None
+       self.checkfunction_light(f, g, inputs={})
+ 
+-      f = None
++      # g first: Windows can't delete a dll that is still loaded (#3039)
        g = None
 -      if os.name!='nt': # Workaround for known bug #3039
-+      if True: # Workaround for known bug #3039
-         with self.assertInException("No such file"):
-           g = ca.Function.load('f.casadi')
+-        with self.assertInException("No such file"):
+-          g = ca.Function.load('f.casadi')
++      f = None
++      with self.assertInException("Cannot load shared library"):
++        g = ca.Function.load('f.casadi')
  
+ 
+     for case in test_cases("embed"):
 diff -ru a/nlp.py b/nlp.py
 --- a/test/python/nlp.py	2026-11-13 00:31:16.829113800 +0100
-+++ b/test/python/nlp.py	2026-11-13 00:31:25.426171570 +0100
-@@ -1949,7 +1949,7 @@
++++ b/test/python/nlp.py	2026-11-13 00:38:42.240108452 +0100
+@@ -1949,12 +1949,11 @@
            with self.assertRaises(RuntimeError):
              F(lbg=5,ubg=10)
            
 -          if os.name != 'nt':
-+          if True:
-               # uno's interior-point ("ipopt") preset reports an infeasible problem
-               # as an algorithmic error (line-search failure) -> SOLVER_RET_EXCEPTION,
-               # whereas the SQP presets report infeasible-stationary. Both are valid
+-              # uno's interior-point ("ipopt") preset reports an infeasible problem
+-              # as an algorithmic error (line-search failure) -> SOLVER_RET_EXCEPTION,
+-              # whereas the SQP presets report infeasible-stationary. Both are valid
+-              # "solver failed on infeasible problem" outcomes (vm and codegen agree).
+-              self.check_codegen(solver,dict(lbg=5,ubg=10),main=True,main_return_code=[ca.SOLVER_RET_UNKNOWN, ca.SOLVER_RET_INFEASIBLE, ca.SOLVER_RET_EXCEPTION],**aux_options["codegen"])
++          # uno's interior-point ("ipopt") preset reports an infeasible problem
++          # as an algorithmic error (line-search failure) -> SOLVER_RET_EXCEPTION,
++          # whereas the SQP presets report infeasible-stationary. Both are valid
++          # "solver failed on infeasible problem" outcomes (vm and codegen agree).
++          self.check_codegen(solver,dict(lbg=5,ubg=10),main=True,main_return_code=[ca.SOLVER_RET_UNKNOWN, ca.SOLVER_RET_INFEASIBLE, ca.SOLVER_RET_EXCEPTION],**aux_options["codegen"])
+ 
+   def test_indefinite(self):
+ 
 diff -ru a/serialize.py b/serialize.py
 --- a/test/python/serialize.py	2026-11-13 00:31:16.837113854 +0100
-+++ b/test/python/serialize.py	2026-11-13 00:31:25.426171570 +0100
-@@ -100,9 +100,9 @@
++++ b/test/python/serialize.py	2026-11-13 00:38:42.241108459 +0100
+@@ -100,10 +100,8 @@
                  # issue #3339: references predate superscs multipliers
                  if name.startswith("lam_"): continue
                  digits = 7
 -            if sys.platform=="darwin":
-+            if False:
-                 digits = 7 # Bug?
+-                digits = 7 # Bug?
 -            if sys.platform=="win32":
-+            if False:
-                 digits = 7 # Bug?
+-                digits = 7 # Bug?
++            if sys.platform in ("darwin", "win32"):
++                digits = 14 # reference data was generated on linux
              self.checkarray(o,o_ref,digits=digits,failmessage=fun+"/"+str(f))
              
+   def test_identity(self):
