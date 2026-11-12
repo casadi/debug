@@ -1,0 +1,116 @@
+diff -ru a/ad.py b/ad.py
+--- a/test/python/ad.py	2026-11-13 00:31:16.826113780 +0100
++++ b/test/python/ad.py	2026-11-13 00:31:25.426171570 +0100
+@@ -661,7 +661,7 @@
+               self.checkarray(fun_out[1],funsx_out[1])
+             else:
+               funsx_ad = None
+-            if "pow" in str(out) and os.name=='nt':
++            if False and "pow" in str(out) and os.name=='nt':
+               pass # Known bug #3038
+             else:
+               self.check_codegen(fun,inputs=values,std=std,digits=codegen_check_digits)
+@@ -721,7 +721,7 @@
+                   if sym is ca.MX.sym:
+                       self.check_eval_mx([ca.vvcat(e) for e in fwdsens])
+                       self.check_eval_mx([ca.vvcat(e) for e in adjsens])
+-                  if "pow" in str(out) and os.name=='nt':
++                  if False and "pow" in str(out) and os.name=='nt':
+                     pass # Known bug #3038
+                   else:
+                     self.check_codegen(vf,inputs=vf_in,std=std,digits=codegen_check_digits)
+@@ -750,7 +750,7 @@
+                     vf_in.append(ca.DM(vf.sparsity_in(i),random.random(vf.nnz_in(i))))
+ 
+                   vf_out = vf.call(vf_in)
+-                  if "pow" in str(out) and os.name=='nt':
++                  if False and "pow" in str(out) and os.name=='nt':
+                     pass # Known bug #3038
+                   else:
+                     self.check_codegen(vf,inputs=vf_in,std=std,digits=codegen_check_digits)
+@@ -791,7 +791,7 @@
+                       vf2_in.append(ca.DM(vf2.sparsity_in(i),random.random(vf2.nnz_in(i))))
+ 
+                     vf2_out = vf2.call(vf2_in)
+-                    if "pow" in str(out) and os.name=='nt':
++                    if False and "pow" in str(out) and os.name=='nt':
+                       pass # Known bug #3038
+                     else:
+                       self.check_codegen(vf2,inputs=vf2_in,std=std,digits=codegen_check_digits)
+@@ -819,7 +819,7 @@
+                 Jf = jacobian_old(f, 0, 0)
+                 Jf_out = Jf.call(values)
+ 
+-                if "pow" in str(out) and os.name=='nt':
++                if False and "pow" in str(out) and os.name=='nt':
+                   pass # Known bug #3038
+                 else:
+                   self.check_codegen(Jf,inputs=values,std=std,digits=codegen_check_digits)
+@@ -845,7 +845,7 @@
+ 
+                 Hf = hessian_old(f, 0, 0)
+                 Hf_out = Hf.call(values)
+-                if "pow" in str(out) and os.name=='nt':
++                if False and "pow" in str(out) and os.name=='nt':
+                   pass # Known bug #3038
+                 else:
+                   self.check_codegen(Hf,inputs=values,std=std,digits=codegen_check_digits)
+diff -ru a/conic.py b/conic.py
+--- a/test/python/conic.py	2026-11-13 00:31:16.833113827 +0100
++++ b/test/python/conic.py	2026-11-13 00:31:25.426171570 +0100
+@@ -975,7 +975,7 @@
+       solver_in["uba"]=UBA
+ 
+       # Known bug #3038
+-      if conic=="superscs" and platform.system()=="Darwin":
++      if False:
+         pass
+       else:
+         self.check_serialize(solver,solver_in)
+diff -ru a/function.py b/function.py
+--- a/test/python/function.py	2026-11-13 00:31:16.831113814 +0100
++++ b/test/python/function.py	2026-11-13 00:31:25.426171570 +0100
+@@ -3648,7 +3648,6 @@
+ 
+   def test_jit_serialize(self):
+     if not args.run_slow: return
+-    if sys.platform=="darwin": return
+ 
+     def test_cases(jit_serialize):
+       opts = {"jit":True, "compiler": "shell", "jit_options": {"verbose":True}, "verbose":False, "jit_serialize": jit_serialize}
+@@ -3705,7 +3704,7 @@
+ 
+       f = None
+       g = None
+-      if os.name!='nt': # Workaround for known bug #3039
++      if True: # Workaround for known bug #3039
+         with self.assertInException("No such file"):
+           g = ca.Function.load('f.casadi')
+ 
+diff -ru a/nlp.py b/nlp.py
+--- a/test/python/nlp.py	2026-11-13 00:31:16.829113800 +0100
++++ b/test/python/nlp.py	2026-11-13 00:31:25.426171570 +0100
+@@ -1949,7 +1949,7 @@
+           with self.assertRaises(RuntimeError):
+             F(lbg=5,ubg=10)
+           
+-          if os.name != 'nt':
++          if True:
+               # uno's interior-point ("ipopt") preset reports an infeasible problem
+               # as an algorithmic error (line-search failure) -> SOLVER_RET_EXCEPTION,
+               # whereas the SQP presets report infeasible-stationary. Both are valid
+diff -ru a/serialize.py b/serialize.py
+--- a/test/python/serialize.py	2026-11-13 00:31:16.837113854 +0100
++++ b/test/python/serialize.py	2026-11-13 00:31:25.426171570 +0100
+@@ -100,9 +100,9 @@
+                 # issue #3339: references predate superscs multipliers
+                 if name.startswith("lam_"): continue
+                 digits = 7
+-            if sys.platform=="darwin":
++            if False:
+                 digits = 7 # Bug?
+-            if sys.platform=="win32":
++            if False:
+                 digits = 7 # Bug?
+             self.checkarray(o,o_ref,digits=digits,failmessage=fun+"/"+str(f))
+             

@@ -1,0 +1,69 @@
+name: deactivated-unittest issues - rerun un-gated tests against 3.8.2
+
+on: [push, workflow_dispatch]
+
+jobs:
+  rerun:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - image: windows-2022
+            plat: win_amd64
+          - image: macos-15
+            plat: macosx_11_0_arm64
+          - image: macos-15-intel
+            plat: macosx_11_0_x86_64.macosx_11_0_intel
+    runs-on: ${{ matrix.image }}
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: casadi/casadi
+          ref: "3.8.2"
+          path: src
+          sparse-checkout: test/python
+      - uses: ilammy/msvc-dev-cmd@v1
+        if: contains(matrix.image, 'windows')
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install casadi 3.8.2 wheel
+        shell: bash
+        run: |
+          python -m pip install -q numpy scipy pandas looseversion
+          python -m pip install -q "https://github.com/casadi/casadi/releases/download/3.8.2/casadi-3.8.2-cp311-abi3-${{ matrix.plat }}.whl"
+          python -c "import casadi; print(casadi.__version__, casadi.has_conic('superscs'), casadi.has_nlpsol('ipopt'))"
+      - name: Apply un-gating patch + fetch serialize_3.5.5 data
+        shell: bash
+        run: |
+          cd src
+          git apply ../ungate.patch
+          git diff --stat
+          cd test/python
+          curl -fsSL -o s.zip https://github.com/casadi/testbot/releases/download/perpetual/serialize_3.5.5.zip
+          unzip -q s.zip && ls -d serialize_3.5.5
+      - name: Run the un-gated tests
+        shell: bash
+        run: |
+          set +e
+          cd src/test/python
+          run() {
+            echo "::group::$*"
+            python "$@" --run_slow > "log_$1_$2.txt" 2>&1; rc=$?
+            tail -n 60 "log_$1_$2.txt"
+            echo "::endgroup::"
+            echo "RESULT rc=$rc : $*" | tee -a summary.txt
+          }
+          run ad.py ADtests.test_MX
+          run nlp.py NLPtests.test_infeasible
+          run function.py Functiontests.test_jit_serialize
+          run conic.py ConicTests.test_linear
+          run serialize.py SerializeTests.test_compat
+          echo "===== SUMMARY ${{ matrix.image }}"; cat summary.txt
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: logs-${{ matrix.image }}
+          path: src/test/python/log_*.txt
