@@ -162,13 +162,13 @@ diff -ru a/nlp.py b/nlp.py
  
 diff -ru a/serialize.py b/serialize.py
 --- a/test/python/serialize.py	2026-11-13 00:31:16.837113854 +0100
-+++ b/test/python/serialize.py	2026-11-13 01:34:34.978195040 +0100
++++ b/test/python/serialize.py	2026-11-13 03:55:26.158446848 +0100
 @@ -96,14 +96,12 @@
            self.assertEqual(len(outp),len(outp_ref))
            for name,o,o_ref in zip(f.name_out(),outp,outp_ref):
              digits = 15
 +            if sys.platform in ("darwin", "win32"):
-+                digits = 13 # reference data was generated on linux
++                digits = 11 # linux-generated references; sqpmethod amplifies last-bit differences
              if "SuperscsInterface" in str(f):
                  # issue #3339: references predate superscs multipliers
                  if name.startswith("lam_"): continue
