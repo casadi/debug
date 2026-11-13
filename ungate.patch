@@ -127,6 +127,18 @@ diff -ru a/function.py b/function.py
  
  
      for case in test_cases("embed"):
+diff -ru a/helpers.py b/helpers.py
+--- a/test/python/helpers.py	2026-11-13 01:34:10.614022168 +0100
++++ b/test/python/helpers.py	2026-11-13 01:34:10.630022282 +0100
+@@ -971,7 +971,7 @@
+         print("here",commands)
+         env = os.environ
+         if os.name=='nt':
+-            env["PATH"] = env["PATH"]+";"+libdir
++            env["PATH"] = libdir+";"+env["PATH"] # casadi's runtime dlls must win (#3917)
+         else:
+             if "LD_LIBRARY_PATH" in env:
+                 env["LD_LIBRARY_PATH"] = env["LD_LIBRARY_PATH"] + ":" + libdir
 diff -ru a/nlp.py b/nlp.py
 --- a/test/python/nlp.py	2026-11-13 00:31:16.829113800 +0100
 +++ b/test/python/nlp.py	2026-11-13 00:38:42.240108452 +0100
