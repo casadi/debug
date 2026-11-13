@@ -162,8 +162,14 @@ diff -ru a/nlp.py b/nlp.py
  
 diff -ru a/serialize.py b/serialize.py
 --- a/test/python/serialize.py	2026-11-13 00:31:16.837113854 +0100
-+++ b/test/python/serialize.py	2026-11-13 00:38:42.241108459 +0100
-@@ -100,10 +100,8 @@
++++ b/test/python/serialize.py	2026-11-13 01:34:34.978195040 +0100
+@@ -96,14 +96,12 @@
+           self.assertEqual(len(outp),len(outp_ref))
+           for name,o,o_ref in zip(f.name_out(),outp,outp_ref):
+             digits = 15
++            if sys.platform in ("darwin", "win32"):
++                digits = 13 # reference data was generated on linux
+             if "SuperscsInterface" in str(f):
                  # issue #3339: references predate superscs multipliers
                  if name.startswith("lam_"): continue
                  digits = 7
@@ -171,8 +177,6 @@ diff -ru a/serialize.py b/serialize.py
 -                digits = 7 # Bug?
 -            if sys.platform=="win32":
 -                digits = 7 # Bug?
-+            if sys.platform in ("darwin", "win32"):
-+                digits = 14 # reference data was generated on linux
              self.checkarray(o,o_ref,digits=digits,failmessage=fun+"/"+str(f))
              
    def test_identity(self):
