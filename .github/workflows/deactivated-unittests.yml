@@ -76,6 +76,9 @@ jobs:
           }
           Write-Output "===== SUMMARY ${{ matrix.image }}"; Get-Content summary.txt
           exit 0
+      - name: Measure serialize_3.5.5 mismatch per function
+        shell: bash
+        run: python measure_compat.py src/test/python/serialize_3.5.5
       - uses: actions/upload-artifact@v4
         if: always()
         with:
