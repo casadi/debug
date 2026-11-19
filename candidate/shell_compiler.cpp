@@ -120,13 +120,11 @@ namespace {
     // Quote a path
     std::string quote(const std::string& s, bool shell) {
 #ifdef _WIN32
-      // MSVC runtime rules
+      // MSVC runtime rules, always quoted: a batch file compiler runs through cmd.exe
       if (shell) {
         // cmd.exe expands % and ! also within quotes
         casadi_assert(s.find_first_of("%!\"")==std::string::npos,
           "Unsupported character in '" + s + "' for a command with cmd.exe syntax");
-      } else if (!s.empty() && s.find_first_of(" \t\n\"")==std::string::npos) {
-        return s;
       }
       std::string r = "\"";
       size_t n_backslash = 0;
@@ -505,13 +503,6 @@ namespace {
     // CreateProcess does not skip leading whitespace
     cc.erase(0, cc.find_first_not_of(" \t"));
     ld.erase(0, ld.find_first_not_of(" \t"));
-    // Batch files are run through cmd.exe in any case
-    for (const std::string& c : {cc, ld}) {
-      size_t e;
-      std::string p = program(c, e);
-      if (p.size()>=4 && (_stricmp(p.c_str()+p.size()-4, ".bat")==0
-          || _stricmp(p.c_str()+p.size()-4, ".cmd")==0)) shell = true;
-    }
     // Set up Visual Studio if cl.exe is not on the PATH
     const WinEnv* env = nullptr;
     size_t end;
