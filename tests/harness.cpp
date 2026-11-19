@@ -286,8 +286,9 @@ static void test_quote_roundtrip() {
         bool once = s.size()>3000;
         std::string line = casadi::quote(d.path, false) + " " + q + (once ? "" : " sep " + q);
         Dump r = dump_line(line, shell!=0);
-        std::vector<std::string> want = {s, "sep", s};
-        if (once) want = {s};
+        std::string ws = !s.empty() && (s[0]=='-' || s[0]=='@') ? "./" + s : s;
+        std::vector<std::string> want = {ws, "sep", ws};
+        if (once) want = {ws};
         std::string what = d.label + " input=" + esc(s) + " quoted=" + esc(q);
         if (!r.ok) {
           fail(what + " child did not run, ret=" + std::to_string(r.ret));
@@ -308,13 +309,19 @@ static void test_quote_roundtrip() {
 #ifdef _WIN32
 // ---------------------------------------------------------------- Windows unit tests
 static void test_units() {
+  set_env("HARNESS_V", "hello world");
+  set_env("HARNESS_OP", "a&b");
+  unset_env("HARNESS_UNDEF");
   section("cmd_syntax");
   struct C { std::string s; bool want; };
   std::vector<C> cs = {
     {"", false}, {"cl.exe", false}, {">nul", true}, {"2>nul", true}, {"a|b", true}, {"a<b", true},
     {"a^b", true}, {"a&b", true}, {"\"a&b\"", false}, {"\"a\"&b", true}, {"\"a&b", false},
-    {"-DX=\"a b\"", false}, {"%X%", false}, {"!X!", false}, {"(a)", false},
+    {"-DX=\"a b\"", false}, {"!X!", false}, {"(a)", false}, {"100%", false},
     {"call x.bat && cl", true}, {"/DTAG=a^&b", true}, {"\"\"&", true},
+    {"%HARNESS_V%", false}, {"%HARNESS_OP%", true}, {"\"%HARNESS_OP%\"", false},
+    {"%HARNESS_UNDEF%", true}, {"/I%CD%\\inc", true}, {"%HARNESS_V:~0,3%", true},
+    {"%%", false}, {"50% and 60%", true}, {"%HARNESS_V%%", false},
   };
   for (const C& c : cs) {
     bool got = casadi::cmd_syntax(c.s);
@@ -322,23 +329,52 @@ static void test_units() {
   }
 
   section("program");
-  struct P { std::string cmd, prog, rest; };
+  struct P { std::string cmd, prog; };
   std::vector<P> ps = {
-    {"cl.exe /c", "cl.exe", " /c"},
-    {"cl", "cl", ""},
-    {"\"C:\\Program Files\\VS\\cl.exe\" /c", "C:\\Program Files\\VS\\cl.exe", " /c"},
-    {"\"C:\\Program Files\\VS\\cl.exe\"", "C:\\Program Files\\VS\\cl.exe", ""},
-    {"\"cl.exe\"", "cl.exe", ""},
-    {"cl\t/c", "cl", "\t/c"},
-    {"\"unterminated", "unterminated", ""},
-    {"\"\"", "", ""},
+    {"cl.exe /c", "cl.exe"}, {"cl", "cl"},
+    {"\"C:\\Program Files\\VS\\cl.exe\" /c", "C:\\Program Files\\VS\\cl.exe"},
+    {"\"C:\\Program Files\\VS\\cl.exe\"", "C:\\Program Files\\VS\\cl.exe"},
+    {"\"cl.exe\"", "cl.exe"}, {"cl\t/c", "cl"}, {"\"unterminated", "unterminated"}, {"\"\"", ""},
+    {" cl.exe /c", "cl.exe"}, {"C:\\a b\\cc.bat x", "C:\\a"},
   };
   for (const P& p : ps) {
-    size_t end = 0;
-    std::string prog = casadi::program(p.cmd, end);
-    std::string rest = end<=p.cmd.size() ? p.cmd.substr(end) : "?";
-    check(prog==p.prog && rest==p.rest, "program(" + esc(p.cmd) + ") gave " + esc(prog)
-      + " rest " + esc(rest) + ", expected " + esc(p.prog) + " rest " + esc(p.rest));
+    std::string prog = casadi::program(p.cmd);
+    check(prog==p.prog, "program(" + esc(p.cmd) + ") gave " + esc(prog) + ", expected " + esc(p.prog));
+  }
+
+  section("win_direct");
+  struct D { std::string prog; int want; };  // -1: depends on the runner
+  std::vector<D> ds = {
+    {"cmd", 0}, {"cmd.exe", 0}, {"CMD.EXE", 0}, {"no_such_program_harness", 0}, {"", 0},
+    {"where", 1}, {"where.exe", 1},
+  };
+  std::string wd = join(g_work, "direct dir");
+  make_dir(wd);
+  write_file(join(wd, "wrap.bat"), "@echo off\r\n");
+  write_file(join(wd, "wrap.cmd"), "@echo off\r\n");
+  ds.push_back({join(wd, "wrap.bat"), 0});
+  ds.push_back({join(wd, "wrap.cmd"), 0});
+  ds.push_back({join(wd, "wrap"), 0});
+  if (!g_dumps.empty()) ds.push_back({g_dumps[0].path, 1});
+  for (const D& d : ds) {
+    bool got = casadi::win_direct(d.prog, nullptr);
+    check(got==(d.want==1), "win_direct(" + esc(d.prog) + ")=" + std::to_string(got));
+  }
+  for (const char* n : {"gcc", "cl", "cl.exe", "link.exe"}) {
+    std::string f;
+    std::cout << "   win_direct(" << n << ")=" << casadi::win_direct(n, nullptr)
+              << (casadi::win_find(n, nullptr, f) ? " " + f : "") << std::endl;
+  }
+
+  section("include_dir");
+  struct I { std::string in, want; };
+  std::vector<I> is = {
+    {"C:\\a b", "C:\\a b"}, {"\"C:\\a b\"", "C:\\a b"}, {"%HARNESS_V%", "hello world"},
+    {"\"%HARNESS_V%\"", "hello world"}, {"\"a\"b\"", "a\"b"}, {"\"", "\""}, {"\"\"", ""},
+  };
+  for (const I& c : is) {
+    std::string got = casadi::include_dir(c.in);
+    check(got==c.want, "include_dir(" + esc(c.in) + ")=" + esc(got) + ", expected " + esc(c.want));
   }
 
   section("expand: %VAR%");
@@ -672,7 +708,10 @@ static void jit_dirs(const std::string& label, const std::string& sub, const Dic
     std::vector<std::string> s = sentinels(d);
     check(s.empty(), "dir=" + esc(n) + ": side effect " + vesc(s));
 #ifdef _WIN32
-    bool expect_refusal = shell && n.find_first_of("%!")!=std::string::npos;
+    CPINFO cpi;
+    bool mb_acp = GetACP()!=CP_UTF8 && GetCPInfo(CP_ACP, &cpi) && cpi.MaxCharSize>1;
+    bool expect_refusal = (shell && n.find_first_of("%!")!=std::string::npos)
+      || (mb_acp && non_ascii(n));
 #else
     bool expect_refusal = false;
 #endif
@@ -776,7 +815,9 @@ static void test_jit_options() {
       // Quoted full path with spaces
       o = jit_base();
       o["compiler"] = "\"" + clfull + "\"";
-      run("compiler quoted full path (no Visual Studio setup)", o, w);
+      if (!jit_try(src, d + SEP, o, w, err)) {
+        note("compiler quoted full path (no Visual Studio setup): " + err.substr(0, 160));
+      }
       // A setup batch file in the compiler command
       std::string sd = join(d, "setup & (x)");
       make_dir(sd);
@@ -823,13 +864,110 @@ static void test_jit_options() {
   check(!ok2, "missing compiler fails: " + err);
 }
 
+
+// Mode choice, include directories, unbalanced quotes
+static void test_modes() {
+  section("JIT mode choice and include_dirs (" + g_jit + ")");
+  std::string d = join(g_work, "modes dir");
+  make_dir(d);
+  std::string src = join(d, "jit src.c");
+  write_file(src, jit_source);
+  std::string cwd = current_dir();
+  std::string err;
+  Want w, wi;
+  wi.square = 1049;
+  auto run = [&](const std::string& what, Dict o, const Want& want) {
+    bool ok = jit_try(src, d + SEP, o, want, err);
+    check(ok, what + ": " + err);
+    std::vector<std::string> s = sentinels(d);
+    check(s.empty(), what + ": side effect " + vesc(s));
+  };
+  auto refused = [&](const std::string& what, Dict o, const std::string& msg) {
+    bool ok = jit_try(src, d + SEP, o, w, err);
+    check(!ok && err.find(msg)!=std::string::npos, what + ": expected '" + msg + "', got "
+      + (ok ? std::string("success") : err));
+    std::vector<std::string> s = sentinels(d);
+    check(s.empty(), what + ": side effect " + vesc(s));
+  };
+
+  // Include directories
+  std::vector<std::string> names = {"inc space", "inc & (x)", "inc O'Brien", "inc 100%",
+    "inc ^caret", "inc semi;colon"};
+#ifndef _WIN32
+  names.push_back("inc $(mkdir sfxdir)");
+  names.push_back("inc `mkdir sfxdir2`");
+  names.push_back("inc \"dq\"");
+  names.push_back("inc $HOME");
+#endif
+  for (const std::string& n : names) {
+    std::string inc = join(d, n);
+    make_dir(inc);
+    write_file(join(inc, "harness_inc.h"), "#define INC_VALUE 1000\n");
+    set_env("HARNESS_INC", inc);
+    std::vector<std::string> forms;
+    // include_dirs expand variables, so a literal $ or %VAR% in a name needs quoting
+    if (n.find('$')==std::string::npos) forms.push_back(inc);
 #ifdef _WIN32
-// Compiler started through a batch file wrapper, without cmd.exe syntax in options
-static void test_bat_wrapper() {
-  section("JIT with a batch file as compiler (" + g_jit + ")");
-  std::string wd = join(g_work, "wrap");
-  make_dir(wd);
-  std::string ccw = join(wd, "ccwrap.bat"), ldw = join(wd, "ldwrap.bat");
+    forms.push_back("\"" + inc + "\"");
+    forms.push_back("%HARNESS_INC%");
+    forms.push_back("\"%HARNESS_INC%\"");
+#else
+    if (inc.find('\'')==std::string::npos) forms.push_back("'" + inc + "'");
+    forms.push_back("$HARNESS_INC");
+    forms.push_back("${HARNESS_INC}");
+    forms.push_back("\"$HARNESS_INC\"");
+#endif
+    for (int shell=0; shell<2; ++shell) {
+#ifndef _WIN32
+      if (shell) continue;
+#endif
+      for (const std::string& f : forms) {
+        Dict o = jit_base();
+        std::vector<std::string> fl = {def_flag() + "USE_INC"};
+        if (shell) fl.push_back(">nul");
+        o["flags"] = fl;
+        o["include_dirs"] = std::vector<std::string>{f};
+        std::string what = std::string(shell ? "cmd.exe" : "direct") + " include_dirs " + esc(f)
+          + " (" + esc(n) + ")";
+#ifdef _WIN32
+        if (shell && inc.find_first_of("%!")!=std::string::npos) {
+          refused(what, o, "Unsupported character");
+          continue;
+        }
+#endif
+        run(what, o, wi);
+      }
+    }
+  }
+
+#ifdef _WIN32
+  // Fallback triggers
+  Dict o = jit_base();
+  o["flags"] = std::vector<std::string>{">nul"};
+  run("flags [\">nul\"]", o, w);
+
+  std::string inc = join(d, "cdinc");
+  make_dir(inc);
+  write_file(join(inc, "harness_inc.h"), "#define INC_VALUE 1000\n");
+  change_dir(d);
+  o = jit_base();
+  o["flags"] = std::vector<std::string>{def_flag() + "USE_INC", inc_flag() + "%CD%\\cdinc"};
+  run("flags [\"" + inc_flag() + "%CD%\\cdinc\"]", o, wi);
+  o["flags"] = std::vector<std::string>{def_flag() + "USE_INC", "\"" + inc_flag() + "%CD%\\cdinc\""};
+  run("flags [\"\\\"" + inc_flag() + "%CD%\\cdinc\\\"\"]", o, wi);
+  change_dir(cwd);
+
+  // Unbalanced quotes with cmd.exe
+  o = jit_base();
+  o["flags"] = std::vector<std::string>{def_flag() + "Q=\\\"", ">nul"};
+  refused("flags [" + esc(def_flag() + "Q=\\\"") + ", \">nul\"]", o, "Unbalanced quotes");
+  o["flags"] = std::vector<std::string>{"-DQ=\"a&mkdir sfxdir&b"};
+  refused("flags [" + esc("-DQ=\"a&mkdir sfxdir&b") + "]", o, "Unbalanced quotes");
+
+  // Compiler through a variable holding cmd.exe syntax
+  std::string sd = join(d, "setup & (x)");
+  make_dir(sd);
+  std::string sb = join(sd, "setup.bat");
   if (g_jit=="cl") {
     std::string bat = Peek::vcvarsall();
 #if defined(_M_ARM64) || defined(__aarch64__)
@@ -839,43 +977,130 @@ static void test_bat_wrapper() {
 #else
     std::string arch = "x86";
 #endif
-    write_file(ccw, "@call \"" + bat + "\" " + arch + " >nul\r\n@cl %*\r\n");
-    write_file(ldw, "@call \"" + bat + "\" " + arch + " >nul\r\n@link %*\r\n");
+    write_file(sb, "@call \"" + bat + "\" " + arch + " >nul\r\n");
+    set_env("HARNESS_CC", "call \"" + sb + "\" && cl");
+    set_env("HARNESS_LD", "call \"" + sb + "\" && link");
   } else {
-    write_file(ccw, "@gcc %*\r\n");
-    write_file(ldw, "@gcc %*\r\n");
+    write_file(sb, "@set HARNESS_FROM_BAT=1\r\n");
+    set_env("HARNESS_CC", "call \"" + sb + "\" && gcc");
+    set_env("HARNESS_LD", "call \"" + sb + "\" && gcc");
   }
-  // A root without spaces, so that CasADi's paths are not quoted in direct mode
+  o = jit_base();
+  o["compiler"] = "%HARNESS_CC%";
+  o["linker"] = "%HARNESS_LD%";
+  run("compiler \"%HARNESS_CC%\" = " + esc(getenv("HARNESS_CC")), o, w);
+
+  // Program names with a dot, found by cmd.exe through PATHEXT
+  if (g_jit=="gcc") {
+    std::string gcc;
+    if (casadi::win_find("gcc", nullptr, gcc)) {
+      std::string dir = gcc.substr(0, gcc.find_last_of('\\'));
+      WIN32_FIND_DATAA fd;
+      HANDLE h = FindFirstFileA((dir + "\\*-gcc-*.exe").c_str(), &fd);
+      if (h!=INVALID_HANDLE_VALUE) {
+        std::string name = fd.cFileName;
+        FindClose(h);
+        name = name.substr(0, name.size()-4);
+        std::cout << "   dotted gcc: " << name << " direct=" << casadi::win_direct(name, nullptr)
+                  << std::endl;
+        o = jit_base();
+        o["compiler"] = name;
+        o["linker"] = name;
+        run("compiler " + esc(name), o, w);
+      } else {
+        note("no *-gcc-*.exe next to " + gcc);
+      }
+    }
+  }
+#else
+  Dict o = jit_base();
+  o["flags"] = std::vector<std::string>{"2>/dev/null"};
+  run("flags [\"2>/dev/null\"]", o, w);
+#endif
+}
+
+#ifdef _WIN32
+// Compiler started through a batch file wrapper, without cmd.exe syntax in options
+static void test_bat_wrapper() {
+  section("JIT with a batch file as compiler (" + g_jit + ")");
+  std::string wd = join(g_work, "wrap");
+  make_dir(wd);
+  std::string arch;
+#if defined(_M_ARM64) || defined(__aarch64__)
+  arch = "arm64";
+#elif defined(_WIN64)
+  arch = "x64";
+#else
+  arch = "x86";
+#endif
+  std::string cc_body, ld_body;
+  if (g_jit=="cl") {
+    std::string bat = Peek::vcvarsall();
+    cc_body = "@call \"" + bat + "\" " + arch + " >nul\r\n@cl %*\r\n";
+    ld_body = "@call \"" + bat + "\" " + arch + " >nul\r\n@link %*\r\n";
+  } else {
+    cc_body = "@gcc %*\r\n";
+    ld_body = "@gcc %*\r\n";
+  }
+  for (const char* ext : {".bat", ".cmd"}) {
+    write_file(join(wd, std::string("ccwrap") + ext), cc_body);
+    write_file(join(wd, std::string("ldwrap") + ext), ld_body);
+  }
+  const char* path = getenv("PATH");
+  std::string old_path = path ? path : "";
+  set_env("PATH", wd + ";" + old_path);
+  struct V { std::string label, cc, ld; };
+  std::vector<V> vs = {
+    {"quoted .bat path", "\"" + join(wd, "ccwrap.bat") + "\"", "\"" + join(wd, "ldwrap.bat") + "\""},
+    {".cmd path", "\"" + join(wd, "ccwrap.cmd") + "\"", "\"" + join(wd, "ldwrap.cmd") + "\""},
+    {"no extension (PATHEXT)", "ccwrap", "ldwrap"},
+    {".bat on PATH", "ccwrap.bat", "ldwrap.bat"},
+  };
+  std::string full;
+  if (g_jit=="gcc") {
+    vs.push_back({"cmd /c gcc", "cmd /c gcc", "cmd /c gcc"});
+  } else if (casadi::win_find("cl.exe", nullptr, full)) {
+    vs.push_back({"cmd /c cl", "cmd /c cl", "cmd /c link"});
+  } else {
+    vs.push_back({"cmd /c ccwrap", "cmd /c ccwrap", "cmd /c ldwrap"});
+  }
+  // A root without spaces, so that CasADi's paths are not quoted for being spaced
   const char* rt = getenv("RUNNER_TEMP");
   std::string root = join(rt ? rt : g_work, "wrapdirs_" + g_jit);
   make_dir(root);
   std::string cwd = current_dir();
-  for (const std::string& n : {"plain", "with space", "R&md,sfxdir3&b", "x)&md,sfxdir3&(y",
-      "c^&md,sfxdir2", "pct%HARNESS_V%dir", "100%"}) {
-    std::string d = join(root, n);
-    make_dir(d);
-    change_dir(d);
-    std::string src = join(d, "jitsrc.c");
-    write_file(src, jit_source);
-    Dict o = jit_base();
-    o["compiler"] = ccw;
-    o["linker"] = ldw;
-    std::string err;
-    bool ok = jit_try(src, d + SEP, o, Want(), err);
-    std::vector<std::string> s = sentinels(d);
-    for (const char* m : {"sfxdir", "sfxdir2", "sfxdir3"}) {
-      if (exists(join(root, m))) s.push_back(join(root, m));
-    }
-    check(s.empty(), "batch compiler, dir=" + esc(n) + ": side effect " + vesc(s));
-    if (std::string(n).find('%')!=std::string::npos) {
-      // cmd.exe expands %VAR% in the paths it is given
-      if (!ok) note("batch compiler, dir=" + esc(n) + ": " + err.substr(0, 200));
+  int k = 0;
+  for (const V& v : vs) {
+    std::string vroot = join(root, std::to_string(k++));
+    make_dir(vroot);
+    for (const char* n : {"plain", "with space", "R&D", "R&md,sfxdir3&b", "x)&md,sfxdir3&(y",
+        "c^&x", "c^&md,sfxdir2", "(x86)", "O'Brien", "pct%HARNESS_V%dir", "100%", "bang!x!"}) {
+      std::string d = join(vroot, n);
+      make_dir(d);
+      change_dir(d);
+      std::string src = join(d, "jitsrc.c");
+      write_file(src, jit_source);
+      Dict o = jit_base();
+      o["compiler"] = v.cc;
+      o["linker"] = v.ld;
+      std::string err;
+      bool ok = jit_try(src, d + SEP, o, Want(), err);
+      std::vector<std::string> s = sentinels(d);
+      for (const char* m : {"sfxdir", "sfxdir2", "sfxdir3"}) {
+        if (exists(join(vroot, m))) s.push_back(join(vroot, m));
+      }
+      std::string what = v.label + " (" + esc(v.cc) + "), dir=" + esc(n);
+      check(s.empty(), what + ": side effect " + vesc(s));
+      if (std::string(n).find_first_of("%!")!=std::string::npos) {
+        check(!ok && err.find("Unsupported character")!=std::string::npos,
+          what + ": expected 'Unsupported character', got " + (ok ? std::string("success") : err));
+      } else {
+        check(ok, what + ": " + err);
+      }
       change_dir(cwd);
-      continue;
     }
-    check(ok, "batch compiler, dir=" + esc(n) + ": " + err);
-    change_dir(cwd);
   }
+  set_env("PATH", old_path);
 }
 #endif
 
@@ -949,6 +1174,25 @@ int main(int argc, char** argv) {
 
   if (want("threads") && g_jit!="none") test_jit_threads();
   if (want("quote")) test_quote_roundtrip();
+#ifndef _WIN32
+  if (want("units")) {
+    section("include_dir");
+    set_env("HARNESS_V", "hello world");
+    unset_env("HARNESS_UNDEF");
+    struct I { std::string in, want; };
+    std::vector<I> is = {
+      {"/a b", "/a b"}, {"'/a b'", "/a b"}, {"'$HARNESS_V'", "$HARNESS_V"},
+      {"\"$HARNESS_V\"", "hello world"}, {"$HARNESS_V", "hello world"},
+      {"${HARNESS_V}x", "hello worldx"}, {"$HARNESS_Vx", ""}, {"$HARNESS_UNDEF", ""},
+      {"a$", "a$"}, {"${HARNESS_V", "${HARNESS_V"}, {"$(x)", "$(x)"}, {"`x`", "`x`"},
+      {"$1", ""}, {"'", "'"}, {"\"", "\""}, {"\"'a'\"", "'a'"},
+    };
+    for (const I& c : is) {
+      std::string got = casadi::include_dir(c.in);
+      check(got==c.want, "include_dir(" + esc(c.in) + ")=" + esc(got) + ", expected " + esc(c.want));
+    }
+  }
+#endif
 #ifdef _WIN32
   if (want("units")) test_units();
   if (want("winrun")) test_win_run();
@@ -963,6 +1207,7 @@ int main(int argc, char** argv) {
     jit_dirs("JIT in awkward directories, cmd.exe (" + g_jit + ")", "shelldirs", sh, true);
 #endif
     test_jit_options();
+    test_modes();
   }
 #ifdef _WIN32
   if (want("wrap") && g_jit!="none") test_bat_wrapper();

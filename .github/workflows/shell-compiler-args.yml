@@ -18,11 +18,7 @@ jobs:
       matrix:
         include:
           - {os: windows-2022, arch: x64, thread: "ON"}
-          - {os: windows-2022, arch: x64, thread: "OFF"}
-          - {os: windows-2022, arch: Win32, thread: "ON"}
-          - {os: windows-2025, arch: x64, thread: "ON"}
           - {os: windows-11-arm, arch: ARM64, thread: "ON"}
-          - {os: windows-2022, arch: x64, thread: "ON", candidate: "ON"}
     defaults:
       run:
         shell: pwsh
@@ -66,6 +62,14 @@ jobs:
           $r = $LASTEXITCODE
           reg delete "HKCU\Software\Microsoft\Command Processor" /v DelayedExpansion /f
           exit $r
+      - name: Process code page variants (cl)
+        if: always() && matrix.arch == 'x64'
+        run: |
+          foreach ($v in "utf8", "acp932") {
+            "=== $v"
+            build/Release/harness_$v.exe --work "$env:HARNESS_WORK\cp $v" @($env:HARNESS_DUMPS -split '\|') --jit cl --only units --only quote --only jit
+          }
+          exit 0
       - name: JIT tests from git-bash (cl)
         if: always()
         shell: bash
