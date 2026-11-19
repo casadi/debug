@@ -1360,7 +1360,8 @@ static void test_cmd_details() {
   // CMDCMDLINE in options
   {
     std::string d = in_dir("cmdline&md,sfxdirC&x");
-    for (const char* f : {"-DX=%CMDCMDLINE%", "-DX=%cmdcmdline:~0,5%", "-DX=!CMDCMDLINE!"}) {
+    for (const char* f : {"-DX=%CMDCMDLINE%", "-DX=%cmdcmdline:~0,5%", "-DX=!CMDCMDLINE!",
+        "/I%=C:%inc", "-I%=c:%inc"}) {
       Dict o = jit_base();
       o["flags"] = std::vector<std::string>{f};
       expect_refusal("flags [" + esc(f) + "]", d, o, "Unsupported variable");
@@ -1453,6 +1454,67 @@ static void test_vs_time() {
   DWORD t0 = GetTickCount();
   casadi::win_env(Peek::vcvarsall(), "x64_x86");
   std::cout << "   win_env x64_x86 alone: " << (GetTickCount()-t0) << " ms" << std::endl;
+}
+#endif
+
+#ifdef _WIN32
+// %CD% with a current directory that only wide APIs can name
+static void test_cd_wide() {
+  section("%CD% with non-ASCII current directories (" + g_jit + ", ACP " + std::to_string(GetACP()) + ")");
+  const char* rt = getenv("RUNNER_TEMP");
+  std::string root = join(rt ? rt : g_work, "cdwide_" + g_jit + "_" + std::to_string(GetACP()));
+  make_dir(root);
+  std::string src = join(root, "jitsrc.c");
+  write_file(src, jit_source);
+  std::string cwd = current_dir();
+  std::wstring wroot(root.begin(), root.end());
+  struct C { std::wstring name; const char* label; bool ok; };
+  bool cp_single = GetACP()!=CP_UTF8;
+  std::vector<C> cs = {
+    {L"a＂ -wrapper x ＂b", "a\\uFF02 -wrapper x \\uFF02b", false},
+    {L"été", "\\u00E9t\\u00E9", cp_single},
+    {L"plainwide", "plainwide", true},
+  };
+  for (const C& c : cs) {
+    std::wstring d = wroot + L"\\" + c.name;
+    CreateDirectoryW(d.c_str(), nullptr);
+    CreateDirectoryW((d + L"\\inc").c_str(), nullptr);
+    FILE* f = _wfopen((d + L"\\inc\\harness_inc.h").c_str(), L"wb");
+    if (f) {
+      fputs("#define INC_VALUE 1000\n", f);
+      fclose(f);
+    }
+    if (!SetCurrentDirectoryW(d.c_str())) {
+      fail(std::string("cannot enter ") + c.label);
+      continue;
+    }
+    for (const std::string& form : {inc_flag() + "\"%CD%\\inc\"", inc_flag() + "%CD%\\inc"}) {
+      Dict o = jit_base();
+      o["flags"] = std::vector<std::string>{def_flag() + "USE_INC", form};
+      Want wi;
+      wi.square = 1049;
+      std::string err;
+      bool ok = jit_try(src, root + SEP, o, wi, err);
+      std::string what = std::string("cwd ") + c.label + " flags [" + esc(form) + "]";
+      if (c.ok) {
+        check(ok, what + ": " + err.substr(0, 200));
+      } else {
+        check(!ok && err.find("current directory")!=std::string::npos, what
+          + ": expected 'Unsupported character in the current directory', got "
+          + (ok ? std::string("success") : err.substr(0, 200)));
+      }
+    }
+    change_dir(cwd);
+  }
+  // What a narrow program receives for U+FF02 in this process
+  if (!g_dumps.empty()) {
+    std::wstring w = L"x＂y";
+    char nb[16] = {0};
+    BOOL used = FALSE;
+    WideCharToMultiByte(CP_ACP, 0, w.c_str(), -1, nb, sizeof(nb), nullptr,
+      GetACP()==CP_UTF8 ? nullptr : &used);
+    std::cout << "   U+FF02 with best fit in ACP " << GetACP() << ": " << esc(nb) << std::endl;
+  }
 }
 #endif
 
@@ -1652,6 +1714,9 @@ int main(int argc, char** argv) {
       + g_jit + ")", "shelldirs", sh, true);
     test_jit_options();
     test_modes();
+#ifdef _WIN32
+    test_cd_wide();
+#endif
   }
 #ifdef _WIN32
   if (want("wrap") && g_jit!="none") test_bat_wrapper();

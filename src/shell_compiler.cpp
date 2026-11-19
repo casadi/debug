@@ -587,13 +587,19 @@ namespace {
       // Nor the command line or current directory, which cmd.exe would expand unquoted
       std::string u = s;
       for (char& c : u) c = static_cast<char>(toupper(static_cast<unsigned char>(c)));
-      casadi_assert(u.find("CMDCMDLINE")==std::string::npos, "Unsupported variable in '" + s + "'");
+      casadi_assert(u.find("CMDCMDLINE")==std::string::npos && u.find("%=")==std::string::npos,
+        "Unsupported variable in '" + s + "'");
       if (u.find("%CD")!=std::string::npos || u.find("%__CD__")!=std::string::npos
-          || u.find("%=")!=std::string::npos || u.find("!CD")!=std::string::npos) {
-        std::vector<wchar_t> cwd(GetCurrentDirectoryW(0, nullptr) + 1);
-        DWORD n = GetCurrentDirectoryW(static_cast<DWORD>(cwd.size()), cwd.data());
-        casadi_assert(n && n<cwd.size()
-          && std::wstring(cwd.data(), n).find_first_of(L"&|<>^()%!\"")==std::wstring::npos,
+          || u.find("!CD")!=std::string::npos) {
+        std::vector<wchar_t> buf(GetCurrentDirectoryW(0, nullptr) + 1);
+        DWORD n = GetCurrentDirectoryW(static_cast<DWORD>(buf.size()), buf.data());
+        std::wstring cwd(buf.data(), n<buf.size() ? n : 0);
+        // Like CasADi's paths, unchanged for the program: no best fit, no trail bytes
+        std::string a;
+        bool ascii = true;
+        for (wchar_t c : cwd) if (c>=0x80) ascii = false;
+        casadi_assert(!cwd.empty() && cwd.find_first_of(L"&|<>^()%!\"")==std::wstring::npos
+          && (ascii || (win_narrow(cwd, a) && win_bytes_safe())),
           "Unsupported character in the current directory for '" + s + "'");
       }
     }
