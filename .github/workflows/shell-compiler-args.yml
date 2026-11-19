@@ -19,7 +19,6 @@ jobs:
         include:
           - {os: windows-2022, arch: x64, thread: "ON"}
           - {os: windows-11-arm, arch: ARM64, thread: "ON"}
-          - {os: windows-2022, arch: x64, thread: "ON", candidate: "ON"}
     defaults:
       run:
         shell: pwsh

@@ -53,11 +53,38 @@ namespace casadi {
 
 namespace {
 #ifdef _WIN32
-    // Environment for the compiler and linker
+    // Variables set up for the compiler and linker
     struct WinEnv {
       std::wstring block;
       std::wstring path;
     };
+
+    // Case-insensitive order of environment variable names
+    struct WinLess {
+      bool operator()(const std::wstring& a, const std::wstring& b) const {
+        return _wcsicmp(a.c_str(), b.c_str())<0;
+      }
+    };
+
+    // Current environment with variables added or changed
+    std::wstring win_block(const std::wstring& changes) {
+      std::map<std::wstring, std::wstring, WinLess> vars;
+      wchar_t* cur = GetEnvironmentStringsW();
+      for (const wchar_t* p : {static_cast<const wchar_t*>(cur), changes.c_str()}) {
+        for (; p && *p; p += wcslen(p)+1) {
+          std::wstring v = p;
+          size_t eq = v.find(L'=', 1);
+          if (eq!=std::wstring::npos) vars[v.substr(0, eq)] = v.substr(eq+1);
+        }
+      }
+      if (cur) FreeEnvironmentStringsW(cur);
+      std::wstring r;
+      for (auto&& kv : vars) {
+        r += kv.first + L"=" + kv.second;
+        r += L'\0';
+      }
+      return r + L'\0';
+    }
 
     // Run a command line, optionally capturing stdout; -1 if it could not be started
     int win_run(const std::string& cmd, const WinEnv* env, std::string* out=nullptr,
@@ -80,9 +107,10 @@ namespace {
       if (env) flags |= CREATE_UNICODE_ENVIRONMENT;
       std::vector<char> buf(cmd.begin(), cmd.end());
       buf.push_back('\0');
+      std::wstring block = env ? win_block(env->block) : L"";
       PROCESS_INFORMATION pi;
       BOOL ok = CreateProcessA(nullptr, buf.data(), nullptr, nullptr, TRUE, flags,
-        env ? const_cast<wchar_t*>(env->block.data()) : nullptr, dir, &si, &pi);
+        env ? const_cast<wchar_t*>(block.data()) : nullptr, dir, &si, &pi);
       if (wr) CloseHandle(wr);
       if (!ok) {
         if (rd) CloseHandle(rd);
@@ -102,40 +130,60 @@ namespace {
       return static_cast<int>(ret);
     }
 
-    // Expand %VAR% as cmd.exe
-    std::string win_expand(const std::string& s) {
-      std::string e = s;
-      DWORD n = ExpandEnvironmentStringsA(s.c_str(), nullptr, 0);
-      if (n) {
-        e.resize(n+1);
-        DWORD m = ExpandEnvironmentStringsA(s.c_str(), &e[0], n+1);
-        if (m && m<=n+1) {
-          e.resize(strlen(e.c_str()));
-        } else {
-          e = s;
-        }
-      }
+    // Text as cmd.exe sees it: decoded as by CreateProcessA, optionally with %VAR% expanded
+    std::wstring win_wide(const std::string& s, bool expand) {
+      std::wstring w(s.size()+1, L'\0');
+      int n = MultiByteToWideChar(CP_ACP, 0, s.c_str(), -1, &w[0], static_cast<int>(w.size()));
+      w.resize(n>0 ? n-1 : 0);
+      if (!expand) return w;
+      DWORD m = ExpandEnvironmentStringsW(w.c_str(), nullptr, 0);
+      std::wstring e(m, L'\0');
+      if (!m || ExpandEnvironmentStringsW(w.c_str(), &e[0], m)!=m) return w;
+      e.resize(m-1);
       return e;
     }
 
+    // Back to the code page of CreateProcessA; false if not representable
+    bool win_narrow(const std::wstring& w, std::string& s) {
+      BOOL lossy = FALSE;
+      bool utf8 = GetACP()==CP_UTF8;
+      int n = WideCharToMultiByte(CP_ACP, utf8 ? 0 : WC_NO_BEST_FIT_CHARS, w.c_str(), -1,
+        nullptr, 0, nullptr, utf8 ? nullptr : &lossy);
+      if (n<=0 || lossy) return false;
+      s.resize(n);
+      WideCharToMultiByte(CP_ACP, utf8 ? 0 : WC_NO_BEST_FIT_CHARS, w.c_str(), -1,
+        &s[0], n, nullptr, nullptr);
+      s.resize(n-1);
+      return true;
+    }
+
     // Does cmd.exe end up outside quotes after an option?
-    bool cmd_balanced(const std::string& s) {
+    bool cmd_balanced(const std::wstring& s) {
       bool in_quotes = false;
       for (size_t i=0; i<s.size(); ++i) {
-        if (s[i]=='"') {
+        if (s[i]==L'"') {
           in_quotes = !in_quotes;
-        } else if (!in_quotes && s[i]=='^' && ++i==s.size()) {
+        } else if (!in_quotes && s[i]==L'^' && ++i==s.size()) {
           return false;
         }
       }
       return !in_quotes;
     }
 
-    // Current directory
-    std::string win_cwd() {
-      std::vector<char> buf(GetCurrentDirectoryA(0, nullptr) + 1);
-      DWORD n = GetCurrentDirectoryA(static_cast<DWORD>(buf.size()), buf.data());
-      return n && n<buf.size() ? std::string(buf.data(), n) : "";
+    // Do non-ASCII bytes reach a narrow program unchanged, without best fit or trail bytes?
+    bool win_bytes_safe() {
+      CPINFO cp;
+      if (GetACP()!=CP_UTF8) return GetCPInfo(CP_ACP, &cp) && cp.MaxCharSize==1;
+      // UTF-8 for this process; the program uses the code page of the system
+      char acp[16] = "";
+      DWORD size = sizeof(acp);
+      HKEY key;
+      if (RegOpenKeyExA(HKEY_LOCAL_MACHINE, "SYSTEM\\CurrentControlSet\\Control\\Nls\\CodePage",
+          0, KEY_QUERY_VALUE, &key)!=ERROR_SUCCESS) return false;
+      LONG ret = RegQueryValueExA(key, "ACP", nullptr, nullptr,
+        reinterpret_cast<BYTE*>(acp), &size);
+      RegCloseKey(key);
+      return ret==ERROR_SUCCESS && size<sizeof(acp) && std::string(acp)=="65001";
     }
 #endif // _WIN32
 
@@ -149,18 +197,10 @@ namespace {
         casadi_assert(c!='%' && c!='!' && c!='"' && static_cast<unsigned char>(c)>=0x20,
           "Unsupported character in '" + s + "'");
       }
-      if (GetACP()==CP_UTF8) {
-        // Fullwidth forms, which a narrow program could map to " or %
-        casadi_assert(s.find("\xEF\xBC")==std::string::npos
-          && s.find("\xEF\xBD")==std::string::npos, "Unsupported character in '" + s + "'");
-      } else {
-        // A multibyte code page could take a backslash or quote as a trail byte
-        CPINFO cp;
-        if (GetCPInfo(CP_ACP, &cp) && cp.MaxCharSize>1) {
-          for (char c : s) {
-            casadi_assert(static_cast<unsigned char>(c)<0x80,
-              "Unsupported character in '" + s + "'");
-          }
+      // Non-ASCII could reach the program as " or \, by best fit or as a trail byte
+      if (!win_bytes_safe()) {
+        for (char c : s) {
+          casadi_assert(static_cast<unsigned char>(c)<0x80, "Unsupported character in '" + s + "'");
         }
       }
       // Plain paths as before
@@ -188,7 +228,8 @@ namespace {
     // Include directory, with enclosing quotes removed as by the shell
     std::string include_dir(const std::string& s) {
 #ifdef _WIN32
-      std::string e = win_expand(s);
+      std::string e;
+      if (!win_narrow(win_wide(s, true), e)) e = s;
       if (e.size()>=2 && e.front()=='"' && e.back()=='"') return e.substr(1, e.size()-2);
       return e;
 #else // _WIN32
@@ -281,7 +322,13 @@ namespace {
           if (!line.empty() && line.back()==L'\r') line.pop_back();
           size_t eq = line.find(L'=');
           if (eq==std::wstring::npos || eq==0) continue;
-          if (_wcsicmp(line.substr(0, eq).c_str(), L"PATH")==0) env.path = line.substr(eq+1);
+          // Only what the batch file changed
+          std::wstring name = line.substr(0, eq), value = line.substr(eq+1);
+          std::vector<wchar_t> cur(32768);
+          DWORD n = GetEnvironmentVariableW(name.c_str(), cur.data(),
+            static_cast<DWORD>(cur.size()));
+          if (n && n<cur.size() && value==cur.data()) continue;
+          if (_wcsicmp(name.c_str(), L"PATH")==0) env.path = value;
           env.block += line;
           env.block += L'\0';
         }
@@ -535,7 +582,7 @@ namespace {
     all.insert(all.end(), linker_flags.begin(), linker_flags.end());
     for (const std::string& s : all) {
       // CasADi's paths must not end up between quotes
-      casadi_assert(cmd_balanced(s) && cmd_balanced(win_expand(s)),
+      casadi_assert(cmd_balanced(win_wide(s, false)) && cmd_balanced(win_wide(s, true)),
         "Unbalanced quotes or trailing ^ in '" + s + "'");
       // Nor the command line or current directory, which cmd.exe would expand unquoted
       std::string u = s;
@@ -543,14 +590,18 @@ namespace {
       casadi_assert(u.find("CMDCMDLINE")==std::string::npos, "Unsupported variable in '" + s + "'");
       if (u.find("%CD")!=std::string::npos || u.find("%__CD__")!=std::string::npos
           || u.find("%=")!=std::string::npos || u.find("!CD")!=std::string::npos) {
-        casadi_assert(win_cwd().find_first_of("&|<>^()%!\"")==std::string::npos,
+        std::vector<wchar_t> cwd(GetCurrentDirectoryW(0, nullptr) + 1);
+        DWORD n = GetCurrentDirectoryW(static_cast<DWORD>(cwd.size()), cwd.data());
+        casadi_assert(n && n<cwd.size()
+          && std::wstring(cwd.data(), n).find_first_of(L"&|<>^()%!\"")==std::wstring::npos,
           "Unsupported character in the current directory for '" + s + "'");
       }
     }
 
     // Set up Visual Studio if cl.exe is not on the PATH
     const WinEnv* env = nullptr;
-    std::string prog = program(win_expand(compiler));
+    std::string cc;
+    std::string prog = program(win_narrow(win_wide(compiler, true), cc) ? cc : compiler);
     if (_stricmp(prog.c_str(), "cl")==0 || _stricmp(prog.c_str(), "cl.exe")==0) {
       bool found = false;
       for (const std::string& e : win_pathext()) {

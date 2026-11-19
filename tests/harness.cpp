@@ -310,8 +310,7 @@ static void test_quote_roundtrip() {
 #ifdef _WIN32
       bool should = s.find_first_of("%!\"")!=std::string::npos;
       for (char c : s) if (static_cast<unsigned char>(c)<0x20) should = true;
-      if (GetACP()==CP_UTF8 && (s.find("\xEF\xBC")!=std::string::npos
-          || s.find("\xEF\xBD")!=std::string::npos)) should = true;
+      if (non_ascii(s) && !casadi::win_bytes_safe()) should = true;
       check(refused==should, "quote(" + esc(s) + ") refused=" + std::to_string(refused));
       if (refused) continue;
       // cmd.exe cannot pass these through a /c line
@@ -360,7 +359,7 @@ static void test_units() {
     {"\"a\"\"b\"", true}, {"^\"", true},
   };
   for (const C& c : cs) {
-    bool got = casadi::cmd_balanced(c.s);
+    bool got = casadi::cmd_balanced(casadi::win_wide(c.s, false));
     check(got==c.want, "cmd_balanced(" + esc(c.s) + ")=" + std::to_string(got));
   }
 
@@ -399,7 +398,8 @@ static void test_units() {
     {"a%HARNESS_V%b", "ahello worldb"}, {"", ""}, {"!HARNESS_V!", "!HARNESS_V!"},
   };
   for (const E& e : es) {
-    std::string got = casadi::win_expand(e.in);
+    std::string got;
+    if (!casadi::win_narrow(casadi::win_wide(e.in, true), got)) got = "(lossy)";
     check(got==e.want, "expand(" + esc(e.in) + ")=" + esc(got) + ", expected " + esc(e.want));
   }
 }
@@ -738,7 +738,7 @@ static std::vector<std::string> awkward_names() {
     "plain", "with space", "O'Brien", "R&D (x86)", "a&mkdir sfxdir&b", "c^d", "c^&x",
     "c^&mkdir sfxdir2", "R&md,sfxdir3&b", "x)&md,sfxdir3&(y", "100%", "pct%HARNESS_V%dir",
     "(paren)", "semi;colon", "bang!x!", "comma,eq=", "tilde~1", "\xC3\xA9t\xC3\xA9", "  two  spaces",
-    "fw\xEF\xBC\x82q", "fw\xEF\xBC\x85p\xEF\xBC\x85", "tab\tx",
+    "fw\xEF\xBC\x82q", "fw\xEF\xBC\x85p\xEF\xBC\x85", "tab\tx", "a\xCA\xBAb",
 #ifndef _WIN32
     "x|y", "a;mkdir sfxdir;b", "dollar$HOME", "back`mkdir sfxdir`", "$(mkdir sfxdir2)",
     "quote\"dq", "star*", "brace{a,b}", "lt<gt>", "a\\b", "new\nline", "a&&mkdir sfxdir",
@@ -784,11 +784,8 @@ static void jit_dirs(const std::string& label, const std::string& sub, const Dic
     std::vector<std::string> s = sentinels(d);
     check(s.empty(), "dir=" + esc(n) + ": side effect " + vesc(s));
 #ifdef _WIN32
-    CPINFO cpi;
-    bool mb_acp = GetACP()!=CP_UTF8 && GetCPInfo(CP_ACP, &cpi) && cpi.MaxCharSize>1;
     bool expect_refusal = n.find_first_of("%!\t")!=std::string::npos
-      || (mb_acp && non_ascii(n))
-      || (GetACP()==CP_UTF8 && n.find("\xEF\xBC")!=std::string::npos);
+      || (non_ascii(n) && !casadi::win_bytes_safe());
 #else
     bool expect_refusal = false;
 #endif
@@ -977,7 +974,7 @@ static void test_modes() {
 
   // Include directories
   std::vector<std::string> names = {"inc space", "inc & (x)", "inc O'Brien", "inc 100%",
-    "inc ^caret", "inc semi;colon"};
+    "inc ^caret", "inc semi;colon", "inc \xC3\xA9t\xC3\xA9", "inc\xE2\x88\x96"};
 #ifndef _WIN32
   names.push_back("inc $(mkdir sfxdir)");
   names.push_back("inc `mkdir sfxdir2`");
@@ -1015,7 +1012,8 @@ static void test_modes() {
         std::string what = std::string(shell ? "cmd.exe" : "direct") + " include_dirs " + esc(f)
           + " (" + esc(n) + ")";
 #ifdef _WIN32
-        if (inc.find_first_of("%!")!=std::string::npos) {
+        if (inc.find_first_of("%!")!=std::string::npos
+            || (non_ascii(inc) && !casadi::win_bytes_safe())) {
           refused(what, o, "Unsupported character");
           continue;
         }
@@ -1026,6 +1024,32 @@ static void test_modes() {
   }
 
 #ifdef _WIN32
+  // Undefined variable as include directory
+  {
+    unset_env("HARNESS_UNDEF_INC");
+    Dict o = jit_base();
+    o["include_dirs"] = std::vector<std::string>{"%HARNESS_UNDEF_INC%"};
+    refused("include_dirs [\"%HARNESS_UNDEF_INC%\"] (undefined)", o, "Unsupported character");
+  }
+  // Quoted non-ASCII option, in a directory with &
+  {
+    std::string ud = join(d, "u8&md,sfxdir&b");
+    make_dir(ud);
+    std::string usrc = join(ud, "jitsrc.c");
+    write_file(usrc, jit_source);
+    change_dir(ud);
+    Dict o = jit_base();
+    o["flags"] = std::vector<std::string>{def_flag() + "T=\"\xE3\x83\x86\xE3\x82\xB9\xE3\x83\x88\" "
+      + def_flag() + "U=\"x\""};
+    bool ok = jit_try(usrc, ud + SEP, o, w, err);
+    std::vector<std::string> x = sentinels(ud);
+    if (exists(join(ud, "sfxdir")) || exists(join(d, "sfxdir"))) x.push_back("sfxdir");
+    check(x.empty(), "quoted non-ASCII option: side effect " + vesc(x));
+    note("quoted non-ASCII option (ACP " + std::to_string(GetACP()) + "): "
+      + (ok ? std::string("ok") : err.substr(0, 160)));
+    change_dir(cwd);
+  }
+
   // Fallback triggers
   Dict o = jit_base();
   o["flags"] = std::vector<std::string>{">nul"};
