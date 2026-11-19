@@ -493,8 +493,18 @@ static void test_expand_vars() {
     + " args, first size " + std::to_string(e.empty() ? 0 : e[0].size()));
 }
 #else
+// Candidate fix: refuse command substitution before wordexp sees the string
+static std::vector<std::string> expand_fixed(const std::string& s) {
+  casadi_assert(s.find('`')==std::string::npos && s.find("$(")==std::string::npos,
+    "Command substitution not supported in '" + s + "'");
+  return casadi::expand(s);
+}
+
 static void test_expand_posix() {
-  section("expand: wordexp");
+ for (int variant=0; variant<2; ++variant) {
+  auto expand = variant==0 ? casadi::expand : expand_fixed;
+  section(variant==0 ? "expand: wordexp" : "expand: wordexp with candidate fix");
+  set_env("HARNESS_A", "x[$(mkdir sfxdir26)]");
   set_env("HARNESS_V", "hello world");
   set_env("HARNESS_W", "$(mkdir sfxdir_w)");
   unset_env("HARNESS_UNDEF");
@@ -519,15 +529,16 @@ static void test_expand_posix() {
     {"", {}},
   };
   for (const Case& c : ok) {
+    if (variant==1 && c.in=="'$(x)'") continue;  // refused by design of the candidate fix
     try {
-      std::vector<std::string> e = casadi::expand(c.in);
+      std::vector<std::string> e = expand(c.in);
       check(e==c.want, "input=" + esc(c.in) + " expected=" + vesc(c.want) + " expand=" + vesc(e));
     } catch (std::exception& ex) {
       fail("input=" + esc(c.in) + " threw: " + ex.what());
     }
   }
   // Must be refused, with no side effect
-  std::string dir = join(g_work, "wordexp");
+  std::string dir = join(g_work, "wordexp" + std::to_string(variant));
   make_dir(dir);
   std::string cwd = current_dir();
   change_dir(dir);
@@ -538,25 +549,34 @@ static void test_expand_posix() {
     "${HARNESS_UNDEF=$(mkdir sfxdir10)}", "x$(mkdir sfxdir11)y", "\"${HARNESS_UNDEF:-$(mkdir sfxdir12)}\"",
     "a;mkdir sfxdir13", "a|mkdir sfxdir14", "a&mkdir sfxdir15", "a>sfxdir16", "a<b", "(mkdir sfxdir17)",
     "{a}", "a\nmkdir sfxdir18", "a&&mkdir sfxdir19",
+    "${HARNESS_UNDEF:-\"$(mkdir sfxdir20)\"}", "${HARNESS_UNDEF:-'$(mkdir sfxdir21)'}",
+    "${HARNESS_V#$(mkdir sfxdir22)}", "${HARNESS_V%`mkdir sfxdir23`}", "$((1+$(mkdir sfxdir24)))",
+    "${HARNESS_UNDEF?$(mkdir sfxdir25)}", "${#HARNESS_V}", "$((1+2))", "$((HARNESS_A))",
+  };
+  auto count = [&]() {
+    int n = 0;
+    for (int i=1; i<=30; ++i) if (exists("sfxdir" + std::to_string(i))) n++;
+    if (exists("sfxdir_w")) n++;
+    return n;
   };
   for (const std::string& s : bad) {
+    int before = count();
     std::string what;
     try {
-      std::vector<std::string> e = casadi::expand(s);
+      std::vector<std::string> e = expand(s);
       what = "accepted -> " + vesc(e);
     } catch (std::exception& ex) {
       what = std::string("refused: ") + ex.what();
     }
     bool refused = what.compare(0, 7, "refused")==0;
-    bool sidefx = false;
-    for (int i=1; i<=19; ++i) if (exists("sfxdir" + std::to_string(i))) sidefx = true;
-    if (exists("sfxdir_w")) sidefx = true;
+    bool sidefx = count()!=before;
     if (sidefx) fail("side effect for input=" + esc(s) + " (" + what + ")");
     else pass();
     if (!refused) note("not refused: input=" + esc(s) + " " + what);
     std::cout << "   " << esc(s) << ": " << what.substr(0, 140) << std::endl;
   }
   change_dir(cwd);
+ }
 }
 #endif
 
