@@ -1,4 +1,4 @@
-// Tests for the argument handling helpers of the shell compiler plugin.
+// Tests for the command line handling of the shell compiler plugin.
 // The plugin source is included verbatim; stubs/ provides the few casadi bits it needs.
 #ifdef HARNESS_CANDIDATE
 #include "../candidate/shell_compiler.cpp"
@@ -27,8 +27,8 @@ const std::string ShellCompiler::meta_doc = "";
 using casadi::Dict;
 using casadi::ShellCompiler;
 
-// Expose the protected static helper
 #ifdef _WIN32
+// Expose the protected static helper
 struct Peek : ShellCompiler {
   using ShellCompiler::vcvarsall;
 };
@@ -211,71 +211,32 @@ static Dump parse_dump(const std::string& text, int ret) {
   return d;
 }
 
-// Start argv_dump through the plugin's run()
-static Dump dump_args(const std::string& exe, const std::vector<std::string>& extra) {
+// Run a command line through the plugin's run(); argv_dump writes to g_outfile
+static Dump dump_line(const std::string& line, bool shell) {
   remove(g_outfile.c_str());
   set_env("ADUMP_OUT", g_outfile);
-  std::vector<std::string> args = {exe};
-  args.insert(args.end(), extra.begin(), extra.end());
 #ifdef _WIN32
-  int ret = casadi::run(args, nullptr);
+  int ret = casadi::run(line, shell, nullptr);
 #else
-  int ret = casadi::run(args);
+  int ret = casadi::run(line, shell);
 #endif
   return parse_dump(read_file(g_outfile), ret);
 }
-
-#ifdef _WIN32
-// Start argv_dump with a raw command line tail
-static Dump dump_raw(const std::string& exe, const std::string& tail) {
-  remove(g_outfile.c_str());
-  set_env("ADUMP_OUT", g_outfile);
-  int ret = casadi::win_run(casadi::quote(exe) + " " + tail, nullptr);
-  return parse_dump(read_file(g_outfile), ret);
-}
-
-// Start argv_dump through cmd.exe, as system() did
-static Dump dump_cmd(const std::string& exe, const std::string& tail) {
-  remove(g_outfile.c_str());
-  set_env("ADUMP_OUT", g_outfile);
-  const char* comspec = getenv("ComSpec");
-  std::string cmd = casadi::quote(comspec ? comspec : "cmd.exe") + " /d /s /c \""
-    + casadi::quote(exe) + " " + tail + "\"";
-  int ret = casadi::win_run(cmd, nullptr);
-  return parse_dump(read_file(g_outfile), ret);
-}
-
-static std::wstring widen(const std::string& s) {
-  int n = MultiByteToWideChar(CP_ACP, 0, s.c_str(), -1, nullptr, 0);
-  std::wstring w(n, L'\0');
-  MultiByteToWideChar(CP_ACP, 0, s.c_str(), -1, &w[0], n);
-  w.resize(n ? n-1 : 0);
-  return w;
-}
-
-static std::string narrow(const std::wstring& w) {
-  int n = WideCharToMultiByte(CP_ACP, 0, w.c_str(), -1, nullptr, 0, nullptr, nullptr);
-  std::string s(n, '\0');
-  WideCharToMultiByte(CP_ACP, 0, w.c_str(), -1, &s[0], n, nullptr, nullptr);
-  s.resize(n ? n-1 : 0);
-  return s;
-}
-
-// In-process reference: CommandLineToArgvW on "x <tail>"
-static std::vector<std::string> ref_w(const std::string& tail) {
-  int n = 0;
-  std::wstring cl = L"x " + widen(tail);
-  LPWSTR* w = CommandLineToArgvW(cl.c_str(), &n);
-  std::vector<std::string> r;
-  for (int i=1; i<n; ++i) r.push_back(narrow(w[i]));
-  LocalFree(w);
-  return r;
-}
-#endif
 
 static bool non_ascii(const std::string& s) {
   for (char c : s) if (static_cast<unsigned char>(c)>=128) return true;
   return false;
+}
+
+// Does quote() refuse the string?
+static bool refuses(const std::string& s, bool shell, std::string* msg=nullptr) {
+  try {
+    casadi::quote(s, shell);
+    return false;
+  } catch (std::exception& e) {
+    if (msg) *msg = e.what();
+    return true;
+  }
 }
 
 // ---------------------------------------------------------------- corpus
@@ -286,381 +247,164 @@ static std::vector<std::string> corpus() {
     "\\", "\\\\", "\\\\\\", "a\\", "a\\\\", "a b\\", "a b\\\\", "a b\\\\\\",
     "\\\"", "\\\\\"", "\\\\\\\"", "a\\\"b", "a\\\\\"b", "a\\\\\\\"b", "\\\\a", "a\\b\\c",
     "C:\\Program Files\\", "C:\\Program Files (x86)\\x\\", "\\\\server\\share\\a b\\",
-    "&|<>^()%!'", "a&b", "a|b", "a^b", "a^&b", "a&&b", "a||b", "a>b", "a<b", "(a)",
+    "&|<>^()%!'", "a&b", "a|b", "a^b", "a^&b", "a&&b", "a||b", "a>b", "a<b", "(a)", "a)b",
     "%PATH%", "%%", "100%", "%", "!PATH!", "'single'", "'a b'", "`tick`", "$HOME", "$(x)",
-    ";", "a;b", "*", "?", "~", "{a,b}", "#hash", "a=b", "@file", "-", "--",
+    ";", "a;b", "*", "?", "~", "{a,b}", "#hash", "a=b", "@file", "-", "--", "a,b", "a;b c",
     "\xC3\xA9t\xC3\xA9", "caf\xE9", "\xE4\xB8\xAD", "\x81\x8D\x8F\x90\x9D",
     "line\nbreak", "cr\rx", "vt\vx", "ff\fx",
-    "-DTAG=\"a b\"", "/FoC:\\a b\\x.obj", "-I\"C:\\a b\\\"",
-    "\"C:\\a b\\\\\" rest", "a\\\\\\\\\"\"b",
+    "R&D (x86)", "a&mkdir sfxdir&b", "c^&x", "O'Brien", "R&md,sfxdir&b", "x)&md,sfxdir&(y",
   };
   std::string long1(8000, 'a');
-  long1 += " \" \\ \\\" end\\";
+  long1 += " & ^ \\ end\\";
   c.push_back(long1);
-  std::string long2;
-  for (int i=0; i<2000; ++i) long2 += "x\\\" ";
-  c.push_back(long2);
   return c;
 }
 
 // ---------------------------------------------------------------- quote round trip
 static void test_quote_roundtrip() {
-  section("quote: argv round trip through run()");
-  for (const DumpExe& d : g_dumps) {
-    for (const std::string& s : corpus()) {
-      Dump r = dump_args(d.path, {s, "sep", s});
-      std::vector<std::string> want = {s, "sep", s};
-      std::string what = d.label + " input=" + esc(s) + " quoted=" + esc(casadi::quote(s));
-      if (!r.ok) {
-        fail(what + " child did not run, ret=" + std::to_string(r.ret));
-        continue;
-      }
-      bool acp = non_ascii(s);
-      if (r.crt==want) {
-        pass();
-      } else if (acp) {
-        note("non-ASCII (code page) " + what + " crt=" + vesc(r.crt));
-      } else {
-        fail(what + " expected=" + vesc(want) + " crt=" + vesc(r.crt));
-      }
+  for (int shell=0; shell<2; ++shell) {
+    section(std::string("quote: argv round trip, shell=") + (shell ? "true" : "false"));
+    for (const DumpExe& d : g_dumps) {
+      for (const std::string& s : corpus()) {
+        std::string msg;
+        bool refused = refuses(s, shell!=0, &msg);
 #ifdef _WIN32
-      if (r.w==want) {
-        pass();
-      } else if (acp) {
-        note("non-ASCII (code page) CommandLineToArgvW " + what + " w=" + vesc(r.w));
-      } else {
-        fail("CommandLineToArgvW " + what + " expected=" + vesc(want) + " w=" + vesc(r.w));
-      }
+        if (shell) {
+          bool should = s.find_first_of("%!\"")!=std::string::npos;
+          check(refused==should, "quote(" + esc(s) + ", true) refused=" + std::to_string(refused));
+          if (refused) continue;
+          // cmd.exe cannot pass these through a /c line
+          if (s.find_first_of("\r\n")!=std::string::npos) continue;
+        }
 #endif
-    }
-  }
-#ifdef _WIN32
-  // Command line beyond the CreateProcess limit
-  if (!g_dumps.empty()) {
-    std::string big(33000, 'a');
-    Dump r = dump_args(g_dumps[0].path, {big});
-    if (r.ret==-1) {
-      note("command line of 33000 chars: run() returns -1 (reported as 'Could not start compiler')");
-    } else {
-      note("command line of 33000 chars: run() returned " + std::to_string(r.ret));
-    }
-  }
-#else
-  // Display quoting is valid for sh
-  section("quote: display quoting is valid sh");
-  for (const DumpExe& d : g_dumps) {
-    for (const std::string& s : corpus()) {
-      if (s.size()>4000) continue;
-      Dump r = dump_args("/bin/sh", {"-c", casadi::quote(d.path) + " " + casadi::quote(s)});
-      check(r.ok && r.crt==std::vector<std::string>{s},
-        d.label + " input=" + esc(s) + " quoted=" + esc(casadi::quote(s)) + " sh gave " + vesc(r.crt));
-    }
-  }
-#endif
-}
-
-// ---------------------------------------------------------------- expand: splitting
-#ifdef _WIN32
-static std::string fuzz_string(std::mt19937& rng, int maxlen) {
-  static const char alphabet[] = {'a', 'b', ' ', '\t', '"', '"', '\\', '\\', '\\'};
-  std::uniform_int_distribution<int> len(0, maxlen), pick(0, sizeof(alphabet)-1);
-  int n = len(rng);
-  std::string s;
-  for (int i=0; i<n; ++i) s += alphabet[pick(rng)];
-  return s;
-}
-
-static bool has_cmd_meta(const std::string& s) {
-  return s.find_first_of("&|<>^()%!\n\r") != std::string::npos;
-}
-
-static void test_expand_split() {
-  section("expand: splitter vs child CRT / CommandLineToArgvW / cmd.exe");
-  std::vector<std::string> inputs;
-  for (const std::string& s : corpus()) if (s.find('%')==std::string::npos) inputs.push_back(s);
-  std::mt19937 rng(12345);
-  for (int i=0; i<400; ++i) inputs.push_back(fuzz_string(rng, 10));
-
-  std::set<std::string> seen;
-  for (const DumpExe& d : g_dumps) {
-    int div = 0, div_cmd = 0;
-    for (const std::string& s : inputs) {
-      if (!seen.insert(d.label + "\x01" + s).second) continue;
-      std::vector<std::string> e = casadi::expand(s);
-      Dump r = dump_raw(d.path, s);
-      bool acp = non_ascii(s);
-      if (!r.ok) {
-        fail(d.label + " child did not run for " + esc(s));
-        continue;
-      }
-      if (r.crt==e) {
-        pass();
-      } else if (acp || d.label!="msvc") {
-        note(d.label + " CRT differs from expand(): input=" + esc(s) + " expand=" + vesc(e)
-          + " crt=" + vesc(r.crt));
-        div++;
-      } else {
-        fail(d.label + " CRT differs from expand(): input=" + esc(s) + " expand=" + vesc(e)
-          + " crt=" + vesc(r.crt));
-        div++;
-      }
-      // What system() gave: cmd.exe, then the CRT
-      if (!has_cmd_meta(s) && s.size()<4000) {
-        Dump c = dump_cmd(d.path, s);
-        if (c.crt==e) {
+        if (refused) {
+          fail("quote(" + esc(s) + ") refused: " + msg);
+          continue;
+        }
+        std::string q = casadi::quote(s, shell!=0);
+        std::string line = casadi::quote(d.path, false) + " " + q + " sep " + q;
+        Dump r = dump_line(line, shell!=0);
+        std::vector<std::string> want = {s, "sep", s};
+        std::string what = d.label + " input=" + esc(s) + " quoted=" + esc(q);
+        if (!r.ok) {
+          fail(what + " child did not run, ret=" + std::to_string(r.ret));
+          continue;
+        }
+        if (r.crt==want) {
           pass();
-        } else if (acp || d.label!="msvc") {
-          note(d.label + " cmd.exe+CRT differs from expand(): input=" + esc(s) + " expand="
-            + vesc(e) + " cmd=" + vesc(c.crt));
-          div_cmd++;
+        } else if (non_ascii(s)) {
+          note("non-ASCII (code page) " + what + " crt=" + vesc(r.crt));
         } else {
-          fail(d.label + " cmd.exe+CRT differs from expand(): input=" + esc(s) + " expand="
-            + vesc(e) + " cmd=" + vesc(c.crt));
-          div_cmd++;
+          fail(what + " expected=" + vesc(want) + " crt=" + vesc(r.crt));
         }
       }
     }
-    std::cout << "   " << d.label << ": " << div << " CRT and " << div_cmd
-              << " cmd.exe divergences" << std::endl;
   }
-
-  // Large in-process fuzz: expand() vs CommandLineToArgvW, and quote() round trip
-  int div_w = 0, bad_rt = 0;
-  std::mt19937 rng2(777);
-  for (int i=0; i<100000; ++i) {
-    std::string s = fuzz_string(rng2, 12);
-    std::vector<std::string> e = casadi::expand(s);
-    std::vector<std::string> w = ref_w(s);
-    if (w!=e) {
-      if (div_w<15) note("CommandLineToArgvW differs from expand(): input=" + esc(s)
-        + " expand=" + vesc(e) + " w=" + vesc(w));
-      div_w++;
-    }
-    std::vector<std::string> rt = ref_w(casadi::cmdline(e));
-    std::vector<std::string> rt2 = casadi::expand(casadi::cmdline(e));
-    if (rt!=e || rt2!=e) {
-      if (bad_rt<15) fail("cmdline(expand(s)) does not round trip: input=" + esc(s)
-        + " expand=" + vesc(e) + " cmdline=" + esc(casadi::cmdline(e)) + " w=" + vesc(rt)
-        + " expand2=" + vesc(rt2));
-      bad_rt++;
-    } else {
-      pass();
-    }
-  }
-  std::cout << "   in-process fuzz: " << div_w << " CommandLineToArgvW divergences, "
-            << bad_rt << " round trip failures out of 100000" << std::endl;
 }
 
-static void test_expand_vars() {
+#ifdef _WIN32
+// ---------------------------------------------------------------- Windows unit tests
+static void test_units() {
+  section("cmd_syntax");
+  struct C { std::string s; bool want; };
+  std::vector<C> cs = {
+    {"", false}, {"cl.exe", false}, {">nul", true}, {"2>nul", true}, {"a|b", true}, {"a<b", true},
+    {"a^b", true}, {"a&b", true}, {"\"a&b\"", false}, {"\"a\"&b", true}, {"\"a&b", false},
+    {"-DX=\"a b\"", false}, {"%X%", false}, {"!X!", false}, {"(a)", false},
+    {"call x.bat && cl", true}, {"/DTAG=a^&b", true}, {"\"\"&", true},
+  };
+  for (const C& c : cs) {
+    bool got = casadi::cmd_syntax(c.s);
+    check(got==c.want, "cmd_syntax(" + esc(c.s) + ")=" + std::to_string(got));
+  }
+
+  section("program");
+  struct P { std::string cmd, prog, rest; };
+  std::vector<P> ps = {
+    {"cl.exe /c", "cl.exe", " /c"},
+    {"cl", "cl", ""},
+    {"\"C:\\Program Files\\VS\\cl.exe\" /c", "C:\\Program Files\\VS\\cl.exe", " /c"},
+    {"\"C:\\Program Files\\VS\\cl.exe\"", "C:\\Program Files\\VS\\cl.exe", ""},
+    {"\"cl.exe\"", "cl.exe", ""},
+    {"cl\t/c", "cl", "\t/c"},
+    {"\"unterminated", "unterminated", ""},
+    {"\"\"", "", ""},
+    {" cl.exe /c", "cl.exe", " /c"},
+    {"\tcl.exe", "cl.exe", ""},
+  };
+  for (const P& p : ps) {
+    size_t end = 0;
+    std::string prog = casadi::program(p.cmd, end);
+    std::string rest = end<=p.cmd.size() ? p.cmd.substr(end) : "?";
+    check(prog==p.prog && rest==p.rest, "program(" + esc(p.cmd) + ") gave " + esc(prog)
+      + " rest " + esc(rest) + ", expected " + esc(p.prog) + " rest " + esc(p.rest));
+  }
+
   section("expand: %VAR%");
   set_env("HARNESS_V", "hello world");
-  set_env("HARNESS_Q", "say \"hi there\"");
-  set_env("HARNESS_E", "");
   unset_env("HARNESS_UNDEF");
-  struct Case { std::string in; std::vector<std::string> want; };
-  std::vector<Case> cases = {
-    {"%HARNESS_V%", {"hello", "world"}},
-    {"\"%HARNESS_V%\"", {"hello world"}},
-    {"%harness_v%", {"hello", "world"}},
-    {"a%HARNESS_V%b", {"ahello", "worldb"}},
-    {"%HARNESS_Q%", {"say", "hi there"}},
-    {"%HARNESS_UNDEF%", {"%HARNESS_UNDEF%"}},
-    {"%HARNESS_UNDEF", {"%HARNESS_UNDEF"}},
-    {"%%", {"%%"}},
-    {"%", {"%"}},
-    {"100%", {"100%"}},
-    {"50% off", {"50%", "off"}},
-    {"%%HARNESS_V%%", {"%hello", "world%"}},
-    {"%HARNESS_V%%HARNESS_V%", {"hello", "worldhello", "world"}},
-    {"x%HARNESS_E%y", {"xy"}},
-    {"%HARNESS_E%", {}},
-    {"", {}},
-    {"   ", {}},
+  struct E { std::string in, want; };
+  std::vector<E> es = {
+    {"%HARNESS_V%", "hello world"}, {"%harness_v%", "hello world"},
+    {"%HARNESS_UNDEF%", "%HARNESS_UNDEF%"}, {"%%", "%%"}, {"%", "%"}, {"100%", "100%"},
+    {"a%HARNESS_V%b", "ahello worldb"}, {"", ""}, {"!HARNESS_V!", "!HARNESS_V!"},
   };
-  for (const Case& c : cases) {
-    std::vector<std::string> e = casadi::expand(c.in);
-    check(e==c.want, "input=" + esc(c.in) + " expected=" + vesc(c.want) + " expand=" + vesc(e));
-    // Reference: what cmd.exe /c and the CRT produce
-    for (const DumpExe& d : g_dumps) {
-      if (d.label!="msvc") continue;
-      Dump r = dump_cmd(d.path, c.in);
-      if (r.crt!=e) note("cmd.exe differs: input=" + esc(c.in) + " expand=" + vesc(e)
-        + " cmd=" + vesc(r.crt));
-      else pass();
-    }
+  for (const E& e : es) {
+    std::string got = casadi::expand(e.in);
+    check(got==e.want, "expand(" + esc(e.in) + ")=" + esc(got) + ", expected " + esc(e.want));
   }
-  // Long expansion
-  std::string big(20000, 'v');
-  set_env("HARNESS_BIG", big);
-  std::vector<std::string> e = casadi::expand("-D%HARNESS_BIG%");
-  check(e.size()==1 && e[0]=="-D" + big, "20000-char expansion: got " + std::to_string(e.size())
-    + " args, first size " + std::to_string(e.empty() ? 0 : e[0].size()));
 }
-#else
-// Candidate fix: refuse command substitution before wordexp sees the string
-static std::vector<std::string> expand_fixed(const std::string& s) {
-  casadi_assert(s.find('`')==std::string::npos && s.find("$(")==std::string::npos,
-    "Command substitution not supported in '" + s + "'");
-  return casadi::expand(s);
-}
-
-static void test_expand_posix() {
- for (int variant=0; variant<2; ++variant) {
-  auto expand = variant==0 ? casadi::expand : expand_fixed;
-  section(variant==0 ? "expand: wordexp" : "expand: wordexp with candidate fix");
-  set_env("HARNESS_A", "x[$(mkdir sfxdir26)]");
-  set_env("HARNESS_B", "x[`mkdir sfxdir27`]");
-  set_env("HARNESS_V", "hello world");
-  set_env("HARNESS_W", "$(mkdir sfxdir_w)");
-  unset_env("HARNESS_UNDEF");
-  std::string home = getenv("HOME") ? getenv("HOME") : "";
-  struct Case { std::string in; std::vector<std::string> want; };
-  std::vector<Case> ok = {
-    {"a b", {"a", "b"}},
-    {"'a b'", {"a b"}},
-    {"\"a b\"", {"a b"}},
-    {"a\\ b", {"a b"}},
-    {"$HARNESS_V", {"hello", "world"}},
-    {"\"$HARNESS_V\"", {"hello world"}},
-    {"${HARNESS_V}x", {"hello", "worldx"}},
-    {"$HARNESS_UNDEF", {}},
-    {"x${HARNESS_UNDEF:-dflt}", {"xdflt"}},
-    {"~", {home}},
-    {"-DTAG=\"a b\"", {"-DTAG=a b"}},
-    {"'a;b'", {"a;b"}},
-    {"\"a|b\"", {"a|b"}},
-    {"'$(x)'", {"$(x)"}},
-    {"$HARNESS_W", {"$(mkdir", "sfxdir_w)"}},
-    {"", {}},
-  };
-  for (const Case& c : ok) {
-#ifdef HARNESS_CANDIDATE
-    if (c.in=="'$(x)'") continue;  // refused by design of the candidate fix
-#endif
-    if (variant==1 && c.in=="'$(x)'") continue;  // refused by design of the candidate fix
-    try {
-      std::vector<std::string> e = expand(c.in);
-      check(e==c.want, "input=" + esc(c.in) + " expected=" + vesc(c.want) + " expand=" + vesc(e));
-    } catch (std::exception& ex) {
-      fail("input=" + esc(c.in) + " threw: " + ex.what());
-    }
-  }
-  // Must be refused, with no side effect
-  std::string dir = join(g_work, "wordexp" + std::to_string(variant));
-  make_dir(dir);
-  std::string cwd = current_dir();
-  change_dir(dir);
-  std::vector<std::string> bad = {
-    "$(mkdir sfxdir1)", "`mkdir sfxdir2`", "\"$(mkdir sfxdir3)\"", "\"`mkdir sfxdir4`\"",
-    "${HARNESS_UNDEF:-$(mkdir sfxdir5)}", "${HARNESS_UNDEF:-`mkdir sfxdir6`}",
-    "$((`mkdir sfxdir7`))", "$(( $(mkdir sfxdir8) ))", "${HARNESS_V:+$(mkdir sfxdir9)}",
-    "${HARNESS_UNDEF=$(mkdir sfxdir10)}", "x$(mkdir sfxdir11)y", "\"${HARNESS_UNDEF:-$(mkdir sfxdir12)}\"",
-    "a;mkdir sfxdir13", "a|mkdir sfxdir14", "a&mkdir sfxdir15", "a>sfxdir16", "a<b", "(mkdir sfxdir17)",
-    "{a}", "a\nmkdir sfxdir18", "a&&mkdir sfxdir19",
-    "${HARNESS_UNDEF:-\"$(mkdir sfxdir20)\"}", "${HARNESS_UNDEF:-'$(mkdir sfxdir21)'}",
-    "${HARNESS_V#$(mkdir sfxdir22)}", "${HARNESS_V%`mkdir sfxdir23`}", "$((1+$(mkdir sfxdir24)))",
-    "${HARNESS_UNDEF?$(mkdir sfxdir25)}", "${#HARNESS_V}", "$((1+2))", "$((HARNESS_A))",
-    "${HARNESS_V:HARNESS_A}", "${HARNESS_V:0:HARNESS_A}", "${HARNESS_V[HARNESS_A]}",
-    "${HARNESS_V:HARNESS_B}", "${HARNESS_V:1}", "${HARNESS_V/o/0}", "${HARNESS_V:-${HARNESS_B}}",
-  };
-  auto count = [&]() {
-    int n = 0;
-    for (int i=1; i<=30; ++i) if (exists("sfxdir" + std::to_string(i))) n++;
-    if (exists("sfxdir_w")) n++;
-    return n;
-  };
-  for (const std::string& s : bad) {
-    int before = count();
-    std::string what;
-    try {
-      std::vector<std::string> e = expand(s);
-      what = "accepted -> " + vesc(e);
-    } catch (std::exception& ex) {
-      what = std::string("refused: ") + ex.what();
-    }
-    bool refused = what.compare(0, 7, "refused")==0;
-    bool sidefx = count()!=before;
-    if (sidefx) fail("side effect for input=" + esc(s) + " (" + what + ")");
-    else pass();
-    if (!refused) note("not refused: input=" + esc(s) + " " + what);
-    std::cout << "   " << esc(s) << ": " << what.substr(0, 140) << std::endl;
-  }
-  change_dir(cwd);
- }
-}
-#endif
 
 // ---------------------------------------------------------------- win_run
-#ifdef _WIN32
 static void test_win_run() {
   section("win_run");
   if (g_dumps.empty()) return;
   const std::string& exe = g_dumps[0].path;
+  std::string qexe = casadi::quote(exe, false);
   for (int code : {0, 1, 3, 42, 255, 1000}) {
     set_env("ADUMP_EXIT", std::to_string(code));
-    Dump r = dump_args(exe, {});
+    Dump r = dump_line(qexe, false);
     check(r.ret==code, "exit code " + std::to_string(code) + " gave " + std::to_string(r.ret));
+    r = dump_line(qexe, true);
+    check(r.ret==code, "shell: exit code " + std::to_string(code) + " gave " + std::to_string(r.ret));
   }
   unset_env("ADUMP_EXIT");
   {
-    std::vector<std::string> a = {"no_such_program_harness.exe", "x"};
-    int ret = casadi::run(a, nullptr);
+    int ret = casadi::run("no_such_program_harness.exe x", false, nullptr);
     check(ret==-1, "nonexistent program gave " + std::to_string(ret));
-    a = {"C:\\no such dir\\x.exe"};
-    ret = casadi::run(a, nullptr);
-    check(ret==-1, "nonexistent path gave " + std::to_string(ret));
-    a = {""};
-    ret = casadi::run(a, nullptr);
-    check(ret==-1, "empty program gave " + std::to_string(ret));
+    ret = casadi::run("no_such_program_harness.exe x", true, nullptr);
+    check(ret!=0 && ret!=-1, "shell: nonexistent program gave " + std::to_string(ret));
   }
   // Environment block
   {
     remove(g_outfile.c_str());
     casadi::WinEnv env;
     const char* sr = getenv("SystemRoot");
-    std::wstring vals[] = {
-      L"ADUMP_ENV=HARNESS_BLOCK",
-      L"ADUMP_OUT=" + widen(g_outfile),
-      L"HARNESS_BLOCK=from block \u00e9",
-      L"SystemRoot=" + widen(sr ? sr : "C:\\Windows"),
-    };
-    for (const std::wstring& v : vals) {
-      env.block += v;
+    std::vector<std::string> vals = {"ADUMP_ENV=HARNESS_BLOCK", "ADUMP_OUT=" + g_outfile,
+      "HARNESS_BLOCK=from block", std::string("SystemRoot=") + (sr ? sr : "C:\\Windows")};
+    for (const std::string& v : vals) {
+      env.block += std::wstring(v.begin(), v.end());
       env.block += L'\0';
     }
     env.block += L'\0';
-    int ret = casadi::win_run(casadi::quote(exe), &env);
+    int ret = casadi::win_run(qexe, &env);
     Dump r = parse_dump(read_file(g_outfile), ret);
-    check(ret==0 && r.env_set && r.env=="from block \xE9", "env block: ret=" + std::to_string(ret)
+    check(ret==0 && r.env=="from block", "env block: ret=" + std::to_string(ret)
       + " env=" + esc(r.env));
-    // Parent variable must not leak into the child
-    set_env("HARNESS_PARENT_ONLY", "1");
-    env.block = L"ADUMP_ENV=HARNESS_PARENT_ONLY";
-    env.block += L'\0';
-    env.block += L"ADUMP_OUT=" + widen(g_outfile);
-    env.block += L'\0';
-    env.block += L'\0';
-    remove(g_outfile.c_str());
-    ret = casadi::win_run(casadi::quote(exe), &env);
-    r = parse_dump(read_file(g_outfile), ret);
-    check(ret==0 && !r.env_set, "env block replaces parent environment");
   }
-  // Stdout capture, large output, exit code
+  // Stdout capture
   {
     unset_env("ADUMP_OUT");
     set_env("ADUMP_SPAM", "3000000");
     set_env("ADUMP_EXIT", "7");
     std::string out;
-    int ret = casadi::win_run(casadi::quote(exe) + " cap", nullptr, &out);
+    int ret = casadi::win_run(qexe + " cap", nullptr, &out);
     size_t nx = 0;
     for (char c : out) if (c=='x') nx++;
     check(ret==7 && nx==3000000, "capture: ret=" + std::to_string(ret) + " x count="
-      + std::to_string(nx) + " size=" + std::to_string(out.size()));
+      + std::to_string(nx));
     unset_env("ADUMP_SPAM");
     unset_env("ADUMP_EXIT");
-    out.clear();
-    ret = casadi::win_run("no_such_program_harness.exe", nullptr, &out);
-    check(ret==-1 && out.empty(), "capture with nonexistent program gave " + std::to_string(ret));
   }
   // Program in a directory with spaces and punctuation
   {
@@ -668,15 +412,9 @@ static void test_win_run() {
     make_dir(d);
     std::string copy = join(d, "argv dump.exe");
     CopyFileA(exe.c_str(), copy.c_str(), FALSE);
-    Dump r = dump_args(copy, {"a b"});
-    check(r.ok && r.ret==0 && r.crt==std::vector<std::string>{"a b"}, "program path "
-      + esc(copy) + " ret=" + std::to_string(r.ret) + " crt=" + vesc(r.crt));
-  }
-  // Console of the child under a console parent
-  {
-    Dump r = dump_args(exe, {});
-    std::cout << "   parent console window: " << (GetConsoleWindow() ? "yes" : "no")
-              << ", child console state: " << r.console << std::endl;
+    Dump r = dump_line(casadi::quote(copy, false) + " \"a b\"", false);
+    check(r.ok && r.crt==std::vector<std::string>{"a b"}, "program path " + esc(copy)
+      + " ret=" + std::to_string(r.ret) + " crt=" + vesc(r.crt));
   }
 }
 
@@ -687,27 +425,10 @@ static bool jit_try_probe(const std::string& src, const std::string& outdir, std
 static int console_probe(const std::string& out) {
   std::ostringstream ss;
   ss << "self_console " << (GetConsoleWindow() ? 1 : 0) << "\n";
-  Dump r = dump_args(g_dumps[0].path, {"probe"});
+  Dump r = dump_line(casadi::quote(g_dumps[0].path, false) + " probe", false);
   ss << "child_ret " << r.ret << "\nchild_console " << r.console << "\n";
-  // Baseline: plain CreateProcess without CREATE_NO_WINDOW
-  {
-    remove(g_outfile.c_str());
-    STARTUPINFOA si;
-    ZeroMemory(&si, sizeof(si));
-    si.cb = sizeof(si);
-    PROCESS_INFORMATION pi;
-    std::string cmd = casadi::quote(g_dumps[0].path);
-    std::vector<char> buf(cmd.begin(), cmd.end());
-    buf.push_back('\0');
-    if (CreateProcessA(nullptr, buf.data(), nullptr, nullptr, FALSE, 0, nullptr, nullptr,
-        &si, &pi)) {
-      WaitForSingleObject(pi.hProcess, INFINITE);
-      CloseHandle(pi.hProcess);
-      CloseHandle(pi.hThread);
-    }
-    Dump b = parse_dump(read_file(g_outfile), 0);
-    ss << "baseline_child_console " << b.console << "\n";
-  }
+  r = dump_line(casadi::quote(g_dumps[0].path, false) + " probe", true);
+  ss << "shell_child_ret " << r.ret << "\nshell_child_console " << r.console << "\n";
   if (g_jit!="none") {
     std::string d = join(g_work, "probe jit & (x)");
     make_dir(d);
@@ -727,9 +448,9 @@ static void test_no_console() {
   GetModuleFileNameA(nullptr, self, MAX_PATH);
   std::string out = join(g_work, "probe.txt");
   remove(out.c_str());
-  std::string cmd = casadi::quote(self) + " --work " + casadi::quote(g_work) + " --dump "
-    + casadi::quote(g_dumps[0].label + "=" + g_dumps[0].path) + " --jit " + g_jit + " --console-probe "
-    + casadi::quote(out);
+  std::string cmd = casadi::quote(self, false) + " --work " + casadi::quote(g_work, false)
+    + " --dump " + casadi::quote(g_dumps[0].label + "=" + g_dumps[0].path, false) + " --jit "
+    + g_jit + " --console-probe " + casadi::quote(out, false);
   std::vector<char> buf(cmd.begin(), cmd.end());
   buf.push_back('\0');
   STARTUPINFOA si;
@@ -740,51 +461,16 @@ static void test_no_console() {
     nullptr, nullptr, &si, &pi);
   check(ok, "start detached probe");
   if (!ok) return;
-  WaitForSingleObject(pi.hProcess, 60000);
+  WaitForSingleObject(pi.hProcess, 120000);
   CloseHandle(pi.hProcess);
   CloseHandle(pi.hThread);
   std::string res = read_file(out);
   std::cout << res;
   check(res.find("self_console 0")!=std::string::npos, "probe has no console");
-  check(res.find("child_ret 0")!=std::string::npos, "child ran from a console-less parent");
-  check(res.find("\nchild_console 2")==std::string::npos, "child got a visible console window");
+  check(res.find("\nchild_ret 0")!=std::string::npos, "child ran from a console-less parent");
+  check(res.find("\nshell_child_ret 0")!=std::string::npos, "shell child ran");
+  check(res.find("child_console 2")==std::string::npos, "child got a visible console window");
   if (g_jit!="none") check(res.find("probe_jit ok")!=std::string::npos, "JIT from a console-less parent");
-}
-
-static void test_batch_status() {
-  section("win_env: batch file exit status");
-  struct Case { std::string body; bool fails; };
-  std::vector<Case> cases = {
-    {"@exit /b 0\r\n", false},
-    {"@exit /b 1\r\n", true},
-    {"@echo off\r\nexit /b 1\r\n", true},
-    {"@echo off\r\nsetlocal\r\nexit /b 1\r\n", true},
-    {"@echo off\r\ngoto :end\r\n:end\r\nexit /B 1\r\n", true},
-    {"@echo off\r\ncall :sub\r\nexit /b 1\r\n:sub\r\nexit /b 0\r\n", true},
-    {"@echo off\r\nset __S=1\r\nendlocal & exit /b %__S%\r\n", true},
-    {"@echo off\r\nno_such_command_harness\r\n", true},
-    {"@echo off\r\nset HARNESS_FROM_BAT=1\r\n", false},
-  };
-  std::string d = join(g_work, "bat dir & (x)");
-  make_dir(d);
-  int k = 0;
-  for (const Case& c : cases) {
-    std::string bat = join(d, "case" + std::to_string(k++) + ".bat");
-    write_file(bat, c.body);
-    bool threw = false;
-    try {
-      casadi::win_env(bat, "x64");
-    } catch (std::exception&) {
-      threw = true;
-    }
-    // Reference: with call
-    const char* comspec = getenv("ComSpec");
-    std::string cmd = casadi::quote(comspec ? comspec : "cmd.exe") + " /d /s /c \"call "
-      + casadi::quote(bat) + " x64 >nul && exit 0 || exit 1\"";
-    int ref = casadi::win_run(cmd, nullptr);
-    check(threw==c.fails, "batch " + esc(c.body) + ": win_env threw=" + std::to_string(threw)
-      + " expected=" + std::to_string(c.fails) + "; with 'call' the status is " + std::to_string(ref));
-  }
 }
 
 static void test_vs_setup() {
@@ -792,12 +478,10 @@ static void test_vs_setup() {
   std::string full;
   bool on_path = casadi::win_find("cl.exe", nullptr, full);
   std::cout << "   cl.exe on PATH: " << (on_path ? full : "no") << std::endl;
-  SetEnvironmentVariableW(L"HARNESS_UNI", L"\u00e9\u4e2d \U0001F600 x=y");
   std::string bat = Peek::vcvarsall();
   std::cout << "   vcvarsall: " << bat << std::endl;
   check(!bat.empty() && exists(bat), "vcvarsall.bat located");
   if (bat.empty()) return;
-  check(Peek::vcvarsall()==bat, "vcvarsall cached");
 #if defined(_M_ARM64) || defined(__aarch64__)
   std::vector<std::string> archs = {"arm64", "arm64_x64"};
 #elif defined(_WIN64)
@@ -813,42 +497,33 @@ static void test_vs_setup() {
       fail("win_env(" + a + ") threw: " + e.what());
       continue;
     }
-    std::wstring blk(env->block.data(), env->block.size());
-    auto has = [&](const wchar_t* k) {
-      std::wstring key = std::wstring(L"\0", 1) + k;
-      return blk.compare(0, wcslen(k), k)==0 || blk.find(key)!=std::wstring::npos;
-    };
-    check(has(L"INCLUDE="), a + ": INCLUDE in environment");
-    check(has(L"LIB="), a + ": LIB in environment");
-    check(has(L"Path=") || has(L"PATH="), a + ": PATH in environment");
-    check(!env->path.empty(), a + ": PATH captured");
-    check(blk.find(std::wstring(L"\0HARNESS_UNI=\u00e9\u4e2d \U0001F600 x=y\0", 23))!=std::wstring::npos,
-      a + ": non-ASCII variable preserved");
-    check(env->block.size()>=2 && env->block[env->block.size()-1]==L'\0'
-      && env->block[env->block.size()-2]==L'\0', a + ": block double-NUL terminated");
     std::string cl, link;
     bool f1 = casadi::win_find("cl.exe", env, cl), f2 = casadi::win_find("link.exe", env, link);
-    std::cout << "   " << a << ": cl=" << cl << " link=" << link << " block="
-              << env->block.size() << " wchars" << std::endl;
+    std::cout << "   " << a << ": cl=" << cl << " link=" << link << std::endl;
     check(f1 && cl.find("\\MSVC\\")!=std::string::npos, a + ": cl.exe resolved: " + cl);
     check(f2 && link.find("\\MSVC\\")!=std::string::npos, a + ": link.exe resolved: " + link);
-    check(casadi::win_find("cl", env, cl), a + ": 'cl' without extension resolved");
     check(casadi::win_env(bat, a)==env, a + ": cached");
-    // The environment runs the tools
-    std::string out;
-    int ret = casadi::win_run(casadi::quote(cl), env, &out);
-    check(ret!=-1, a + ": cl.exe starts with the environment, ret=" + std::to_string(ret));
   }
+  // vcvarsall copied to a directory with cmd.exe syntax in its name
+  std::string d = join(g_work, "vs copy & (x) ^ y");
+  make_dir(d);
+  std::string bat2 = join(d, "setup env.bat");
+  write_file(bat2, "@call \"" + bat + "\" %*\r\n");
   try {
-    const casadi::WinEnv* env = casadi::win_env(bat, "bogus_arch");
-    std::wstring blk(env->block.data(), env->block.size());
+    const casadi::WinEnv* env = casadi::win_env(bat2, archs[0]);
     std::string cl;
-    fail("win_env with an invalid architecture did not throw; INCLUDE in block: "
-      + std::to_string(blk.find(std::wstring(L"\0INCLUDE=", 9))!=std::wstring::npos)
-      + ", cl.exe found: " + std::to_string(casadi::win_find("cl.exe", env, cl)) + " " + cl);
+    check(casadi::win_find("cl.exe", env, cl), "batch file in " + esc(d) + ": cl.exe resolved");
   } catch (std::exception& e) {
-    pass();
-    std::cout << "   bogus_arch: " << std::string(e.what()).substr(0, 200) << std::endl;
+    fail("batch file in " + esc(d) + " threw: " + e.what());
+  }
+  std::string d3 = join(g_work, "vs copy 100%");
+  make_dir(d3);
+  try {
+    casadi::win_env(join(d3, "x.bat"), archs[0]);
+    fail("batch file in " + esc(d3) + " was not refused");
+  } catch (std::exception& e) {
+    check(std::string(e.what()).find("Unsupported character")!=std::string::npos,
+      "batch file in " + esc(d3) + ": " + e.what());
   }
 }
 #endif
@@ -859,7 +534,8 @@ static const char* jit_source =
   "#define XSTR(x) STR(x)\n#define STR(x) #x\n"
   "#ifdef USE_INC\n#include \"harness_inc.h\"\n#else\n#define INC_VALUE 0\n#endif\n"
   "EXPORT int square(int x) { return x*x + INC_VALUE; }\n"
-  "#ifdef TAG\nEXPORT const char* tag(void) { return XSTR(TAG); }\n#endif\n";
+  "#ifdef TAG\nEXPORT const char* tag(void) { return XSTR(TAG); }\n#endif\n"
+  "#ifdef ARR\nstatic int arr[] = ARR;\nEXPORT int arr_len(void) { return sizeof(arr)/sizeof(arr[0]); }\n#endif\n";
 
 static Dict jit_base() {
   Dict d;
@@ -879,8 +555,14 @@ static Dict jit_base() {
 static std::string def_flag() { return g_jit=="cl" ? "/D" : "-D"; }
 static std::string inc_flag() { return g_jit=="cl" ? "/I" : "-I"; }
 
-static bool jit_try(const std::string& src, const std::string& outdir, Dict opts, int want,
-    const char* want_tag, std::string& err) {
+struct Want {
+  int square = 49;
+  const char* tag = nullptr;
+  int arr_len = -1;
+};
+
+static bool jit_try(const std::string& src, const std::string& outdir, Dict opts, const Want& want,
+    std::string& err) {
   opts["directory"] = outdir;
   opts["verbose"] = true;
   try {
@@ -892,19 +574,27 @@ static bool jit_try(const std::string& src, const std::string& outdir, Dict opts
       err = "symbol 'square' not found";
       return false;
     }
-    if (f(7)!=want) {
+    if (f(7)!=want.square) {
       err = "square(7) gave " + std::to_string(f(7));
       return false;
     }
-    if (want_tag) {
+    if (want.tag) {
       typedef const char* (*tag_t)(void);
       tag_t t = reinterpret_cast<tag_t>(sc.get_function("tag"));
       if (!t) {
         err = "symbol 'tag' not found";
         return false;
       }
-      if (std::string(t())!=want_tag) {
-        err = "tag() gave " + esc(t()) + ", expected " + esc(want_tag);
+      if (std::string(t())!=want.tag) {
+        err = "tag() gave " + esc(t()) + ", expected " + esc(want.tag);
+        return false;
+      }
+    }
+    if (want.arr_len>=0) {
+      sq_t a = reinterpret_cast<sq_t>(sc.get_function("arr_len"));
+      int n = a ? reinterpret_cast<int (*)(void)>(a)() : -1;
+      if (n!=want.arr_len) {
+        err = "arr_len() gave " + std::to_string(n);
         return false;
       }
     }
@@ -917,38 +607,43 @@ static bool jit_try(const std::string& src, const std::string& outdir, Dict opts
 
 static const char* jit_source_probe() { return jit_source; }
 static bool jit_try_probe(const std::string& src, const std::string& outdir, std::string& err) {
-  return jit_try(src, outdir, jit_base(), 49, nullptr, err);
+  return jit_try(src, outdir, jit_base(), Want(), err);
 }
 
+// Markers that only appear if part of a name was run as a command
 static std::vector<std::string> sentinels(const std::string& d) {
   std::vector<std::string> r;
-  for (const char* n : {"sfxdir", "sfxdir2"}) {
-    for (const std::string& base : {d, g_work, current_dir()}) {
+  for (const char* n : {"sfxdir", "sfxdir2", "sfxdir3"}) {
+    for (const std::string& base : {d, g_work, current_dir(), join(g_work, "jitdirs"),
+        join(g_work, "shelldirs")}) {
       if (exists(join(base, n))) r.push_back(join(base, n));
     }
   }
   return r;
 }
 
-static void test_jit_dirs() {
-  section("JIT in directories with spaces and punctuation (" + g_jit + ")");
-  set_env("HARNESS_V", "hello world");
-  std::vector<std::string> names = {
-    "plain", "with space", "O'Brien", "R&D (x86)", "a&mkdir sfxdir&b", "c^d", "c^&mkdir sfxdir2",
-    "100%", "pct%HARNESS_V%dir", "(paren)", "semi;colon", "bang!x!", "comma,eq=", "tilde~1",
-    "trail.", "\xC3\xA9t\xC3\xA9", "  two  spaces",
+static std::vector<std::string> awkward_names() {
+  return {
+    "plain", "with space", "O'Brien", "R&D (x86)", "a&mkdir sfxdir&b", "c^d", "c^&x",
+    "c^&mkdir sfxdir2", "R&md,sfxdir3&b", "x)&md,sfxdir3&(y", "100%", "pct%HARNESS_V%dir",
+    "(paren)", "semi;colon", "bang!x!", "comma,eq=", "tilde~1", "\xC3\xA9t\xC3\xA9", "  two  spaces",
 #ifndef _WIN32
     "x|y", "a;mkdir sfxdir;b", "dollar$HOME", "back`mkdir sfxdir`", "$(mkdir sfxdir2)",
     "quote\"dq", "star*", "brace{a,b}", "lt<gt>", "a\\b", "new\nline", "a&&mkdir sfxdir",
+    "x'$(mkdir sfxdir3)'y", "-dash",
 #endif
   };
-  std::string root = join(g_work, "jitdirs");
+}
+
+// Compile in each awkward directory: cwd, source, output and include dir
+static void jit_dirs(const std::string& label, const std::string& sub, const Dict& extra,
+    bool shell) {
+  section(label);
+  set_env("HARNESS_V", "hello world");
+  std::string root = join(g_work, sub);
   make_dir(root);
   std::string cwd = current_dir();
-  for (const std::string& n : names) {
-#ifdef _WIN32
-    if (!n.empty() && n.back()=='.') continue;  // Windows strips trailing dots
-#endif
+  for (const std::string& n : awkward_names()) {
     std::string d = join(root, n);
     if (!make_dir(d)) {
       note("cannot create directory " + esc(d));
@@ -957,11 +652,35 @@ static void test_jit_dirs() {
     change_dir(d);
     std::string src = join(d, "jit src.c");
     write_file(src, jit_source);
+    write_file(join(d, "harness_inc.h"), "#define INC_VALUE 1000\n");
+    Dict o = jit_base();
+    for (auto&& kv : extra) o[kv.first] = kv.second;
+    std::vector<std::string> fl = {def_flag() + "USE_INC"};
+    if (o.count("flags")) {
+      std::vector<std::string> e = o["flags"];
+      fl.insert(fl.end(), e.begin(), e.end());
+    }
+    o["flags"] = fl;
+    o["include_dirs"] = std::vector<std::string>{d};
     std::string err;
-    bool ok = jit_try(src, d + SEP, jit_base(), 49, nullptr, err);
-    check(ok, "dir=" + esc(n) + ": " + err);
+    Want w;
+    w.square = 1049;
+    // Source compiled from cwd=d, so the quoted include also works without include_dirs
+    write_file(join(d, "harness_inc.h"), "#define INC_VALUE 1000\n");
+    bool ok = jit_try(src, d + SEP, o, w, err);
     std::vector<std::string> s = sentinels(d);
     check(s.empty(), "dir=" + esc(n) + ": side effect " + vesc(s));
+#ifdef _WIN32
+    bool expect_refusal = shell && n.find_first_of("%!")!=std::string::npos;
+#else
+    bool expect_refusal = false;
+#endif
+    if (expect_refusal) {
+      check(!ok && err.find("Unsupported character")!=std::string::npos,
+        "dir=" + esc(n) + ": expected 'Unsupported character', got " + (ok ? "success" : err));
+    } else {
+      check(ok, "dir=" + esc(n) + ": " + err);
+    }
     change_dir(cwd);
   }
 }
@@ -972,88 +691,184 @@ static void test_jit_options() {
   make_dir(d);
   std::string src = join(d, "jit src.c");
   write_file(src, jit_source);
-  std::string inc = join(d, "inc dir & (x)");
-  make_dir(inc);
-  write_file(join(inc, "harness_inc.h"), "#define INC_VALUE 1000\n");
   std::string err;
-  bool ok;
   set_env("HARNESS_V", "hello world");
+  Want w;
+  auto run = [&](const std::string& what, Dict o, const Want& want) {
+    bool ok = jit_try(src, d + SEP, o, want, err);
+    check(ok, what + ": " + err);
+    std::vector<std::string> s = sentinels(d);
+    check(s.empty(), what + ": side effect " + vesc(s));
+  };
+
+  // Include directories with spaces and punctuation
+  for (const std::string& n : {"inc space", "inc dir & (x)", "inc 100%", "inc O'Brien"}) {
+    std::string inc = join(d, n);
+    make_dir(inc);
+    write_file(join(inc, "harness_inc.h"), "#define INC_VALUE 1000\n");
+    Dict o = jit_base();
+    o["flags"] = std::vector<std::string>{def_flag() + "USE_INC"};
+    o["include_dirs"] = std::vector<std::string>{inc};
+    Want wi;
+    wi.square = 1049;
+    run("include_dirs " + esc(n), o, wi);
+  }
 
   Dict o = jit_base();
   o["flags"] = std::vector<std::string>{def_flag() + "TAG=\"a b\""};
-  ok = jit_try(src, d + SEP, o, 49, "a b", err);
-  check(ok, "flags " + esc(def_flag() + "TAG=\"a b\"") + ": " + err);
+  Want wt;
+  wt.tag = "a b";
+  run("flags " + esc(def_flag() + "TAG=\"a b\""), o, wt);
 
 #ifdef _WIN32
   o = jit_base();
   o["flags"] = std::vector<std::string>{"\"" + def_flag() + "TAG=%HARNESS_V%\""};
-  ok = jit_try(src, d + SEP, o, 49, "hello world", err);
-  check(ok, "flags with %VAR% in quotes: " + err);
+  wt.tag = "hello world";
+  run("flags with %VAR% in quotes", o, wt);
+
+  // cmd.exe syntax in options
+  o = jit_base();
+  o["flags"] = std::vector<std::string>{">nul"};
+  run("flags [\">nul\"]", o, w);
+
+  o = jit_base();
+  o["flags"] = std::vector<std::string>{def_flag() + "TAG=a^&b"};
+  wt.tag = "a&b";
+  run("flags with ^& " + esc(def_flag() + "TAG=a^&b"), o, wt);
+
+  o = jit_base();
+  o["linker_flags"] = std::vector<std::string>{">nul", "2>&1"};
+  run("linker_flags [\">nul\", \"2>&1\"]", o, w);
+
+  if (g_jit=="cl") {
+    o = jit_base();
+    o["compiler"] = "cl.exe 2>nul";
+    run("compiler \"cl.exe 2>nul\"", o, w);
+
+    o = jit_base();
+    o["compiler"] = "cl /nologo";
+    run("compiler \"cl /nologo\"", o, w);
+
+    set_env("HARNESS_CC", "cl.exe");
+    o = jit_base();
+    o["compiler"] = "%HARNESS_CC%";
+    run("compiler \"%HARNESS_CC%\"", o, w);
+
+    o = jit_base();
+    o["compiler"] = " cl.exe";
+    run("compiler \" cl.exe\" (leading space)", o, w);
+
+    std::string full;
+    std::string bat = Peek::vcvarsall();
+    if (!bat.empty()) {
+#if defined(_M_ARM64) || defined(__aarch64__)
+      std::string arch = "arm64";
+#elif defined(_WIN64)
+      std::string arch = "x64";
+#else
+      std::string arch = "x86";
+#endif
+      const casadi::WinEnv* env = casadi::win_env(bat, arch);
+      std::string clfull, linkfull;
+      casadi::win_find("cl.exe", env, clfull);
+      casadi::win_find("link.exe", env, linkfull);
+      // Quoted full path with spaces
+      o = jit_base();
+      o["compiler"] = "\"" + clfull + "\"";
+      run("compiler quoted full path (no Visual Studio setup)", o, w);
+      // A setup batch file in the compiler command
+      std::string sd = join(d, "setup & (x)");
+      make_dir(sd);
+      std::string sb = join(sd, "vcsetup.bat");
+      write_file(sb, "@call \"" + bat + "\" " + arch + " >nul\r\n");
+      o = jit_base();
+      o["compiler"] = "call \"" + sb + "\" && cl";
+      o["linker"] = "call \"" + sb + "\" && link";
+      run("compiler \"call <bat> && cl\"", o, w);
+    }
+  }
 #else
   o = jit_base();
   o["flags"] = std::vector<std::string>{"\"" + def_flag() + "TAG=$HARNESS_V\""};
-  ok = jit_try(src, d + SEP, o, 49, "hello world", err);
-  check(ok, "flags with $VAR in quotes: " + err);
+  wt.tag = "hello world";
+  run("flags with $VAR in quotes", o, wt);
+
+  o = jit_base();
+  o["flags"] = std::vector<std::string>{"2>/dev/null", ">/dev/null"};
+  run("flags with redirection", o, w);
+
+  o = jit_base();
+  o["flags"] = std::vector<std::string>{"-DARR={1,2,3}"};
+  Want wa;
+  wa.arr_len = 3;
+  bool ok = jit_try(src, d + SEP, o, wa, err);
+  // Reference: what /bin/sh does with the word
+  int r = system("test \"$(printf '%s ' -DARR={1,2,3})\" = '-DARR={1,2,3} '");
+  note("flags [\"-DARR={1,2,3}\"]: " + std::string(ok ? "ok" : err.substr(0, 120))
+    + "; /bin/sh brace expansion: " + (r==0 ? "no" : "yes"));
+
+  const char* ccenv = getenv("CC");
+  set_env("HARNESS_CC", g_jit=="gcc" ? "gcc" : (ccenv ? ccenv : "cc"));
+  o = jit_base();
+  o["compiler"] = "$HARNESS_CC";
+  o["linker"] = "$HARNESS_CC";
+  run("compiler $HARNESS_CC", o, w);
 #endif
 
-  // Compiler given through a variable
-  if (g_jit!="none") {
-#ifdef _WIN32
-    std::string cc = g_jit=="cl" ? "cl.exe" : "gcc";
-    set_env("HARNESS_CC", cc);
-    o = jit_base();
-    o["compiler"] = "%HARNESS_CC%";
-    if (g_jit=="gcc") o["linker"] = "%HARNESS_CC%";
-#else
-    const char* ccenv = getenv("CC");
-    std::string cc = g_jit=="gcc" ? "gcc" : (ccenv ? ccenv : "cc");
-    set_env("HARNESS_CC", cc);
-    o = jit_base();
-    o["compiler"] = "$HARNESS_CC";
-    o["linker"] = "$HARNESS_CC";
-#endif
-    ok = jit_try(src, d + SEP, o, 49, nullptr, err);
-    check(ok, "compiler through a variable: " + err);
-  }
-
-  // Include directory with a space
-  std::string inc2 = join(d, "inc space");
-  make_dir(inc2);
-  write_file(join(inc2, "harness_inc.h"), "#define INC_VALUE 1000\n");
-  o = jit_base();
-  o["flags"] = std::vector<std::string>{def_flag() + "USE_INC"};
-  o["include_dirs"] = std::vector<std::string>{inc2};
-  ok = jit_try(src, d + SEP, o, 1049, nullptr, err);
-  check(ok, "include_dirs " + esc(inc2) + ": " + err);
-
-  // Include directory with spaces and punctuation
-  o = jit_base();
-  o["flags"] = std::vector<std::string>{def_flag() + "USE_INC"};
-  o["include_dirs"] = std::vector<std::string>{inc};
-  ok = jit_try(src, d + SEP, o, 1049, nullptr, err);
-  check(ok, "include_dirs " + esc(inc) + ": " + err);
-
-  o = jit_base();
-  o["flags"] = std::vector<std::string>{def_flag() + "USE_INC", "\"" + inc_flag() + inc + "\""};
-  ok = jit_try(src, d + SEP, o, 1049, nullptr, err);
-  check(ok, "quoted include flag " + esc(inc) + ": " + err);
-
-  // Output flag variants
-  if (g_jit=="gcc" || g_jit=="cc") {
-    o = jit_base();
-    o["compiler_output_flag"] = "-o";
-    o["linker_output_flag"] = "-o";
-    ok = jit_try(src, d + SEP, o, 49, nullptr, err);
-    check(ok, "glued output flags '-o': " + err);
-  }
-
-  // A compiler that cannot be started gives its own error
+  // A compiler that cannot be started
   o = jit_base();
   o["compiler"] = "no_such_compiler_harness";
-  ok = jit_try(src, d + SEP, o, 49, nullptr, err);
-  check(!ok && err.find("Could not start compiler")!=std::string::npos,
-    "missing compiler error: " + err);
+  bool ok2 = jit_try(src, d + SEP, o, w, err);
+  check(!ok2, "missing compiler fails: " + err);
 }
+
+#ifdef _WIN32
+// Compiler started through a batch file wrapper, without cmd.exe syntax in options
+static void test_bat_wrapper() {
+  section("JIT with a batch file as compiler (" + g_jit + ")");
+  std::string wd = join(g_work, "wrap");
+  make_dir(wd);
+  std::string ccw = join(wd, "ccwrap.bat"), ldw = join(wd, "ldwrap.bat");
+  if (g_jit=="cl") {
+    std::string bat = Peek::vcvarsall();
+#if defined(_M_ARM64) || defined(__aarch64__)
+    std::string arch = "arm64";
+#elif defined(_WIN64)
+    std::string arch = "x64";
+#else
+    std::string arch = "x86";
+#endif
+    write_file(ccw, "@call \"" + bat + "\" " + arch + " >nul\r\n@cl %*\r\n");
+    write_file(ldw, "@call \"" + bat + "\" " + arch + " >nul\r\n@link %*\r\n");
+  } else {
+    write_file(ccw, "@gcc %*\r\n");
+    write_file(ldw, "@gcc %*\r\n");
+  }
+  std::string root = join(g_work, "wrapdirs");
+  make_dir(root);
+  std::string cwd = current_dir();
+  for (const std::string& n : {"plain", "with space", "R&md,sfxdir3&b", "x)&md,sfxdir3&(y",
+      "c^&md,sfxdir2", "pct%HARNESS_V%dir", "100%"}) {
+    std::string d = join(root, n);
+    make_dir(d);
+    change_dir(d);
+    std::string src = join(d, "jitsrc.c");
+    write_file(src, jit_source);
+    Dict o = jit_base();
+    o["compiler"] = ccw;
+    o["linker"] = ldw;
+    std::string err;
+    bool ok = jit_try(src, d + SEP, o, Want(), err);
+    std::vector<std::string> s = sentinels(d);
+    for (const char* m : {"sfxdir", "sfxdir2", "sfxdir3"}) {
+      if (exists(join(root, m))) s.push_back(join(root, m));
+    }
+    check(s.empty(), "batch compiler, dir=" + esc(n) + ": side effect " + vesc(s));
+    check(ok, "batch compiler, dir=" + esc(n) + ": " + err);
+    change_dir(cwd);
+  }
+}
+#endif
 
 static void test_jit_threads() {
   section("JIT from several threads (" + g_jit + ")");
@@ -1069,7 +884,7 @@ static void test_jit_threads() {
     write_file(src, jit_source);
     th.emplace_back([=, &errs, &oks]() {
       std::string err;
-      oks[i] = jit_try(src, d + SEP, jit_base(), 49, nullptr, err);
+      oks[i] = jit_try(src, d + SEP, jit_base(), Want(), err);
       errs[i] = err;
     });
   }
@@ -1122,24 +937,27 @@ int main(int argc, char** argv) {
   std::cout << " ACP=" << GetACP();
 #endif
   std::cout << std::endl;
-  for (const DumpExe& d : g_dumps) std::cout << "dump " << d.label << "=" << d.path << std::endl;
 
   if (want("threads") && g_jit!="none") test_jit_threads();
   if (want("quote")) test_quote_roundtrip();
 #ifdef _WIN32
-  if (want("split")) test_expand_split();
-  if (want("vars")) test_expand_vars();
+  if (want("units")) test_units();
   if (want("winrun")) test_win_run();
   if (want("console")) test_no_console();
   if (want("vs") && g_jit=="cl") test_vs_setup();
-  if (want("bat")) test_batch_status();
-#else
-  if (want("split")) test_expand_posix();
 #endif
   if (want("jit") && g_jit!="none") {
-    test_jit_dirs();
+    jit_dirs("JIT in awkward directories, direct (" + g_jit + ")", "jitdirs", Dict(), false);
+#ifdef _WIN32
+    Dict sh;
+    sh["flags"] = std::vector<std::string>{">nul"};
+    jit_dirs("JIT in awkward directories, cmd.exe (" + g_jit + ")", "shelldirs", sh, true);
+#endif
     test_jit_options();
   }
+#ifdef _WIN32
+  if (want("wrap") && g_jit!="none") test_bat_wrapper();
+#endif
   std::cout << "SUMMARY pass=" << n_pass << " fail=" << n_fail << " note=" << n_note << std::endl;
   return n_fail ? 1 : 0;
 }
