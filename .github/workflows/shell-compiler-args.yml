@@ -76,6 +76,16 @@ jobs:
             & "build/Release/harness_$v.exe" --work "$env:HARNESS_WORK\cp $v" @($env:HARNESS_DUMPS -split '\|') --jit cl --only units --only quote --only jit
           }
           exit 0
+      - name: JIT tests with AutoRun set (cl)
+        if: always() && matrix.arch == 'x64'
+        run: |
+          $m = "$env:RUNNER_TEMP\autorun_marker.txt"
+          reg add "HKCU\Software\Microsoft\Command Processor" /v AutoRun /t REG_SZ /d "type nul>>$m" /f
+          build/Release/harness.exe --work "$env:HARNESS_WORK\ar" @($env:HARNESS_DUMPS -split '\|') --jit cl --only jit
+          $r = $LASTEXITCODE
+          reg delete "HKCU\Software\Microsoft\Command Processor" /v AutoRun /f
+          if (Test-Path $m) { "AutoRun ran" } else { "AutoRun did NOT run"; $r = 1 }
+          exit $r
       - name: JIT tests from git-bash (cl)
         if: always()
         shell: bash
