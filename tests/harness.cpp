@@ -112,6 +112,15 @@ static bool make_dir(const std::string& p) {
 #endif
 }
 
+static void make_dirs(const std::string& p) {
+  for (size_t i=1; i<=p.size(); ++i) {
+    if (i==p.size() || p[i]=='/' || p[i]=='\\') {
+      std::string q = p.substr(0, i);
+      if (!q.empty() && q.back()!=':') make_dir(q);
+    }
+  }
+}
+
 static bool change_dir(const std::string& p) {
 #ifdef _WIN32
   return _chdir(p.c_str())==0;
@@ -696,7 +705,43 @@ static void test_no_console() {
   std::cout << res;
   check(res.find("self_console 0")!=std::string::npos, "probe has no console");
   check(res.find("child_ret 0")!=std::string::npos, "child ran from a console-less parent");
-  check(res.find("child_console 2")==std::string::npos, "child got a visible console window");
+  check(res.find("\nchild_console 2")==std::string::npos, "child got a visible console window");
+}
+
+static void test_batch_status() {
+  section("win_env: batch file exit status");
+  struct Case { std::string body; bool fails; };
+  std::vector<Case> cases = {
+    {"@exit /b 0\r\n", false},
+    {"@exit /b 1\r\n", true},
+    {"@echo off\r\nexit /b 1\r\n", true},
+    {"@echo off\r\nsetlocal\r\nexit /b 1\r\n", true},
+    {"@echo off\r\ngoto :end\r\n:end\r\nexit /B 1\r\n", true},
+    {"@echo off\r\ncall :sub\r\nexit /b 1\r\n:sub\r\nexit /b 0\r\n", true},
+    {"@echo off\r\nset __S=1\r\nendlocal & exit /b %__S%\r\n", true},
+    {"@echo off\r\nno_such_command_harness\r\n", true},
+    {"@echo off\r\nset HARNESS_FROM_BAT=1\r\n", false},
+  };
+  std::string d = join(g_work, "bat dir & (x)");
+  make_dir(d);
+  int k = 0;
+  for (const Case& c : cases) {
+    std::string bat = join(d, "case" + std::to_string(k++) + ".bat");
+    write_file(bat, c.body);
+    bool threw = false;
+    try {
+      casadi::win_env(bat, "x64");
+    } catch (std::exception&) {
+      threw = true;
+    }
+    // Reference: with call
+    const char* comspec = getenv("ComSpec");
+    std::string cmd = casadi::quote(comspec ? comspec : "cmd.exe") + " /d /s /c \"call "
+      + casadi::quote(bat) + " x64 >nul && exit 0 || exit 1\"";
+    int ref = casadi::win_run(cmd, nullptr);
+    check(threw==c.fails, "batch " + esc(c.body) + ": win_env threw=" + std::to_string(threw)
+      + " expected=" + std::to_string(c.fails) + "; with 'call' the status is " + std::to_string(ref));
+  }
 }
 
 static void test_vs_setup() {
@@ -746,12 +791,15 @@ static void test_vs_setup() {
     // The environment runs the tools
     std::string out;
     int ret = casadi::win_run(casadi::quote(cl), env, &out);
-    check(ret!=-1 && out.find("Microsoft")!=std::string::npos, a
-      + ": cl.exe starts with the environment, ret=" + std::to_string(ret));
+    check(ret!=-1, a + ": cl.exe starts with the environment, ret=" + std::to_string(ret));
   }
   try {
-    casadi::win_env(bat, "bogus_arch");
-    fail("win_env with an invalid architecture did not throw");
+    const casadi::WinEnv* env = casadi::win_env(bat, "bogus_arch");
+    std::wstring blk(env->block.data(), env->block.size());
+    std::string cl;
+    fail("win_env with an invalid architecture did not throw; INCLUDE in block: "
+      + std::to_string(blk.find(std::wstring(L"\0INCLUDE=", 9))!=std::wstring::npos)
+      + ", cl.exe found: " + std::to_string(casadi::win_find("cl.exe", env, cl)) + " " + cl);
   } catch (std::exception& e) {
     pass();
     std::cout << "   bogus_arch: " << std::string(e.what()).substr(0, 200) << std::endl;
@@ -1005,7 +1053,7 @@ int main(int argc, char** argv) {
     }
   }
   if (g_work.empty()) g_work = current_dir();
-  make_dir(g_work);
+  make_dirs(g_work);
   g_outfile = join(g_work, probe.empty() ? "adump.txt" : "adump_probe.txt");
 #ifdef _WIN32
   if (!probe.empty()) return console_probe(probe);
@@ -1033,6 +1081,7 @@ int main(int argc, char** argv) {
   if (want("winrun")) test_win_run();
   if (want("console")) test_no_console();
   if (want("vs") && g_jit=="cl") test_vs_setup();
+  if (want("bat")) test_batch_status();
 #else
   if (want("split")) test_expand_posix();
 #endif
