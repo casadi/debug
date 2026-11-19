@@ -11,7 +11,7 @@ concurrency:
 
 jobs:
   msvc:
-    name: msvc (${{ matrix.os }}, ${{ matrix.arch }}, thread=${{ matrix.thread }})
+    name: msvc (${{ matrix.os }}, ${{ matrix.arch }}, thread=${{ matrix.thread }}${{ matrix.candidate && ', candidate' || '' }})
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -22,6 +22,7 @@ jobs:
           - {os: windows-2022, arch: Win32, thread: "ON"}
           - {os: windows-2025, arch: x64, thread: "ON"}
           - {os: windows-11-arm, arch: ARM64, thread: "ON"}
+          - {os: windows-2022, arch: x64, thread: "ON", candidate: "ON"}
     defaults:
       run:
         shell: pwsh
@@ -31,7 +32,7 @@ jobs:
         run: Get-FileHash src/* | Format-Table -AutoSize
       - name: Build
         run: |
-          cmake -B build -A ${{ matrix.arch }} -DWITH_THREAD=${{ matrix.thread }}
+          cmake -B build -A ${{ matrix.arch }} -DWITH_THREAD=${{ matrix.thread }} -DCANDIDATE=${{ matrix.candidate || 'OFF' }}
           cmake --build build --config Release
       - name: argv_dump with gcc
         if: matrix.arch == 'x64'
@@ -88,8 +89,12 @@ jobs:
         run: build/harness.exe --work "$env:RUNNER_TEMP\work dir" --dump "msvc=$PWD\build\argv_dump.exe" --jit cl --only jit --only vs --only quote --only wrap
 
   mingw-native:
-    name: mingw (windows-2022, runner gcc)
+    name: mingw (windows-2022, runner gcc, candidate=${{ matrix.candidate }})
     runs-on: windows-2022
+    strategy:
+      fail-fast: false
+      matrix:
+        candidate: ["OFF", "ON"]
     defaults:
       run:
         shell: pwsh
@@ -98,7 +103,7 @@ jobs:
       - name: Build
         run: |
           gcc --version
-          cmake -B build -G "MinGW Makefiles" -DCMAKE_BUILD_TYPE=Release -DWITH_THREAD=ON
+          cmake -B build -G "MinGW Makefiles" -DCMAKE_BUILD_TYPE=Release -DWITH_THREAD=ON -DCANDIDATE=${{ matrix.candidate }}
           cmake --build build
       - name: Prepare
         run: '"HARNESS_WORK=$env:RUNNER_TEMP\work dir (1)" | Out-File -Append $env:GITHUB_ENV'
