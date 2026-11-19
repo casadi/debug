@@ -738,7 +738,7 @@ static std::vector<std::string> awkward_names() {
     "plain", "with space", "O'Brien", "R&D (x86)", "a&mkdir sfxdir&b", "c^d", "c^&x",
     "c^&mkdir sfxdir2", "R&md,sfxdir3&b", "x)&md,sfxdir3&(y", "100%", "pct%HARNESS_V%dir",
     "(paren)", "semi;colon", "bang!x!", "comma,eq=", "tilde~1", "\xC3\xA9t\xC3\xA9", "  two  spaces",
-    "fw\xEF\xBC\x82q", "fw\xEF\xBC\x85p\xEF\xBC\x85", "tab\tx", "a\xCA\xBAb",
+    "fw\xEF\xBC\x82q", "fw\xEF\xBC\x85p\xEF\xBC\x85", "tab\tx", "a\xCA\xBA" "b",
 #ifndef _WIN32
     "x|y", "a;mkdir sfxdir;b", "dollar$HOME", "back`mkdir sfxdir`", "$(mkdir sfxdir2)",
     "quote\"dq", "star*", "brace{a,b}", "lt<gt>", "a\\b", "new\nline", "a&&mkdir sfxdir",
