@@ -2,6 +2,10 @@
 // Minimal stand-in for the harness
 #include "casadi_misc.hpp"
 #ifdef _WIN32
+// As casadi_os.hpp
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
 #include <windows.h>
 #else
 #include <dlfcn.h>

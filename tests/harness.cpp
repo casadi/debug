@@ -946,10 +946,14 @@ static void test_modes() {
   o["flags"] = std::vector<std::string>{">nul"};
   run("flags [\">nul\"]", o, w);
 
-  std::string inc = join(d, "cdinc");
+  // %CD% is not quoted, so use a directory without spaces
+  const char* rt = getenv("RUNNER_TEMP");
+  std::string cdd = join(rt ? rt : g_work, "cdtest_" + g_jit);
+  make_dir(cdd);
+  std::string inc = join(cdd, "cdinc");
   make_dir(inc);
   write_file(join(inc, "harness_inc.h"), "#define INC_VALUE 1000\n");
-  change_dir(d);
+  change_dir(cdd);
   o = jit_base();
   o["flags"] = std::vector<std::string>{def_flag() + "USE_INC", inc_flag() + "%CD%\\cdinc"};
   run("flags [\"" + inc_flag() + "%CD%\\cdinc\"]", o, wi);
@@ -961,8 +965,14 @@ static void test_modes() {
   o = jit_base();
   o["flags"] = std::vector<std::string>{def_flag() + "Q=\\\"", ">nul"};
   refused("flags [" + esc(def_flag() + "Q=\\\"") + ", \">nul\"]", o, "Unbalanced quotes");
+  // No operator outside quotes: started directly, nothing interprets the rest
   o["flags"] = std::vector<std::string>{"-DQ=\"a&mkdir sfxdir&b"};
-  refused("flags [" + esc("-DQ=\"a&mkdir sfxdir&b") + "]", o, "Unbalanced quotes");
+  {
+    bool ok = jit_try(src, d + SEP, o, w, err);
+    std::vector<std::string> sx = sentinels(d);
+    check(sx.empty(), "flags [" + esc("-DQ=\"a&mkdir sfxdir&b") + "]: side effect " + vesc(sx));
+    note("flags [" + esc("-DQ=\"a&mkdir sfxdir&b") + "]: " + (ok ? "ok" : err.substr(0, 160)));
+  }
 
   // Compiler through a variable holding cmd.exe syntax
   std::string sd = join(d, "setup & (x)");
