@@ -824,6 +824,14 @@ static void test_jit_options() {
     o["include_dirs"] = std::vector<std::string>{inc};
     Want wi;
     wi.square = 1049;
+#ifdef _WIN32
+    if (std::string(n).find('%')!=std::string::npos) {
+      bool ok = jit_try(src, d + SEP, o, wi, err);
+      check(!ok && err.find("Unsupported character")!=std::string::npos, "include_dirs " + esc(n)
+        + ": expected 'Unsupported character', got " + (ok ? std::string("success") : err));
+      continue;
+    }
+#endif
     run("include_dirs " + esc(n), o, wi);
   }
 
@@ -1169,7 +1177,13 @@ static void test_cmd_details() {
       "Unbalanced quotes or trailing ^");
     o = jit_base();
     o["flags"] = std::vector<std::string>{"%HARNESS_CQ%", ">nul"};
-    expect_refusal("cwd " + dn + " flag %HARNESS_CQ%=a^\"b", d, o, "Unbalanced quotes");
+    {
+      // cmd.exe sees an escaped quote: accepted
+      bool ok = jit_try(join(d, "jitsrc.c"), d + SEP, o, w, err);
+      std::vector<std::string> x = sfx(d);
+      check(x.empty(), "cwd " + dn + " flag %HARNESS_CQ%=a^\"b: side effect " + vesc(x));
+      note("cwd " + dn + " flag %HARNESS_CQ%=a^\"b: " + (ok ? std::string("ok") : err.substr(0, 120)));
+    }
     o = jit_base();
     o["flags"] = std::vector<std::string>{"%HARNESS_OQ%", ">nul"};
     expect_refusal("cwd " + dn + " flag %HARNESS_OQ%=a\"b", d, o, "Unbalanced quotes");
@@ -1323,7 +1337,9 @@ static void test_cmd_details() {
       write_file(join(join(d, "inc"), "harness_inc.h"), "#define INC_VALUE 1000\n");
       Want wi;
       wi.square = 1049;
-      for (const char* form : {"%CD%", "%cd%", "%CD:~0%", "%CD:x=x%", "%__CD__%"}) {
+      for (const char* form : {"%CD%", "%cd%", "%CD:~0%", "%CD:x=x%", "%__CD__%", "%cd:~0,200%"}) {
+        RemoveDirectoryA(join(d, "sfxdirC").c_str());
+        RemoveDirectoryA(join(root, "sfxdirC").c_str());
         Dict o = jit_base();
         std::string fl = inc_flag() + form + (std::string(form)=="%__CD__%" ? "inc" : "\\inc");
         o["flags"] = std::vector<std::string>{def_flag() + "USE_INC", fl};
