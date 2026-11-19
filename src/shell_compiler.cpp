@@ -145,13 +145,22 @@ namespace {
       if (!s.empty() && (s[0]=='-' || s[0]=='@')) return quote("./" + s);
 #ifdef _WIN32
       // cmd.exe expands % and ! also within quotes
-      casadi_assert(s.find_first_of("%!\"")==std::string::npos,
-        "Unsupported character in '" + s + "'");
-      // A multibyte code page could take a backslash or quote as a trail byte
-      CPINFO cp;
-      if (GetACP()!=CP_UTF8 && GetCPInfo(CP_ACP, &cp) && cp.MaxCharSize>1) {
-        for (char c : s) {
-          casadi_assert(static_cast<unsigned char>(c)<0x80, "Unsupported character in '" + s + "'");
+      for (char c : s) {
+        casadi_assert(c!='%' && c!='!' && c!='"' && static_cast<unsigned char>(c)>=0x20,
+          "Unsupported character in '" + s + "'");
+      }
+      if (GetACP()==CP_UTF8) {
+        // Fullwidth forms, which a narrow program could map to " or %
+        casadi_assert(s.find("\xEF\xBC")==std::string::npos
+          && s.find("\xEF\xBD")==std::string::npos, "Unsupported character in '" + s + "'");
+      } else {
+        // A multibyte code page could take a backslash or quote as a trail byte
+        CPINFO cp;
+        if (GetCPInfo(CP_ACP, &cp) && cp.MaxCharSize>1) {
+          for (char c : s) {
+            casadi_assert(static_cast<unsigned char>(c)<0x80,
+              "Unsupported character in '" + s + "'");
+          }
         }
       }
       // Plain paths as before
@@ -247,9 +256,15 @@ namespace {
       std::string key = bat + " " + args;
       auto it = cache.find(key);
       if (it==cache.end()) {
+        std::string qbat;
+        try {
+          qbat = quote(bat);
+        } catch (std::exception&) {
+          return nullptr;
+        }
         const char* comspec = getenv("ComSpec");
         std::string cmd = "\"" + std::string(comspec ? comspec : "cmd.exe")
-          + "\" /u /d /s /c \"set VSCMD_SKIP_SENDTELEMETRY=1&& " + quote(bat) + " " + args
+          + "\" /u /d /s /c \"set VSCMD_SKIP_SENDTELEMETRY=1&& " + qbat + " " + args
           + " >nul && set\"";
         std::string dir = bat.substr(0, bat.find_last_of('\\')), out;
         if (win_run(cmd, nullptr, &out, dir.c_str())) out.clear();
@@ -522,11 +537,12 @@ namespace {
       // CasADi's paths must not end up between quotes
       casadi_assert(cmd_balanced(s) && cmd_balanced(win_expand(s)),
         "Unbalanced quotes or trailing ^ in '" + s + "'");
-      // Nor the current directory, which cmd.exe would expand unquoted
+      // Nor the command line or current directory, which cmd.exe would expand unquoted
       std::string u = s;
       for (char& c : u) c = static_cast<char>(toupper(static_cast<unsigned char>(c)));
-      if (u.find("%CD%")!=std::string::npos || u.find("%__CD__%")!=std::string::npos
-          || u.find("%=")!=std::string::npos) {
+      casadi_assert(u.find("CMDCMDLINE")==std::string::npos, "Unsupported variable in '" + s + "'");
+      if (u.find("%CD")!=std::string::npos || u.find("%__CD__")!=std::string::npos
+          || u.find("%=")!=std::string::npos || u.find("!CD")!=std::string::npos) {
         casadi_assert(win_cwd().find_first_of("&|<>^()%!\"")==std::string::npos,
           "Unsupported character in the current directory for '" + s + "'");
       }

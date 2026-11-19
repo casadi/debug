@@ -309,6 +309,9 @@ static void test_quote_roundtrip() {
       bool refused = refuses(s, &msg);
 #ifdef _WIN32
       bool should = s.find_first_of("%!\"")!=std::string::npos;
+      for (char c : s) if (static_cast<unsigned char>(c)<0x20) should = true;
+      if (GetACP()==CP_UTF8 && (s.find("\xEF\xBC")!=std::string::npos
+          || s.find("\xEF\xBD")!=std::string::npos)) should = true;
       check(refused==should, "quote(" + esc(s) + ") refused=" + std::to_string(refused));
       if (refused) continue;
       // cmd.exe cannot pass these through a /c line
@@ -628,11 +631,10 @@ static void test_vs_setup() {
   std::string d3 = join(g_work, "vs copy 100%");
   make_dir(d3);
   try {
-    casadi::win_env(join(d3, "x.bat"), archs[0]);
-    fail("batch file in " + esc(d3) + " was not refused");
+    const casadi::WinEnv* e3 = casadi::win_env(join(d3, "x.bat"), archs[0]);
+    check(e3==nullptr, "batch file in " + esc(d3) + ": expected no environment");
   } catch (std::exception& e) {
-    check(std::string(e.what()).find("Unsupported character")!=std::string::npos,
-      "batch file in " + esc(d3) + ": " + e.what());
+    fail("batch file in " + esc(d3) + " threw: " + e.what());
   }
 }
 #endif
@@ -736,6 +738,7 @@ static std::vector<std::string> awkward_names() {
     "plain", "with space", "O'Brien", "R&D (x86)", "a&mkdir sfxdir&b", "c^d", "c^&x",
     "c^&mkdir sfxdir2", "R&md,sfxdir3&b", "x)&md,sfxdir3&(y", "100%", "pct%HARNESS_V%dir",
     "(paren)", "semi;colon", "bang!x!", "comma,eq=", "tilde~1", "\xC3\xA9t\xC3\xA9", "  two  spaces",
+    "fw\xEF\xBC\x82q", "fw\xEF\xBC\x85p\xEF\xBC\x85", "tab\tx",
 #ifndef _WIN32
     "x|y", "a;mkdir sfxdir;b", "dollar$HOME", "back`mkdir sfxdir`", "$(mkdir sfxdir2)",
     "quote\"dq", "star*", "brace{a,b}", "lt<gt>", "a\\b", "new\nline", "a&&mkdir sfxdir",
@@ -783,8 +786,9 @@ static void jit_dirs(const std::string& label, const std::string& sub, const Dic
 #ifdef _WIN32
     CPINFO cpi;
     bool mb_acp = GetACP()!=CP_UTF8 && GetCPInfo(CP_ACP, &cpi) && cpi.MaxCharSize>1;
-    bool expect_refusal = n.find_first_of("%!")!=std::string::npos
-      || (mb_acp && non_ascii(n));
+    bool expect_refusal = n.find_first_of("%!\t")!=std::string::npos
+      || (mb_acp && non_ascii(n))
+      || (GetACP()==CP_UTF8 && n.find("\xEF\xBC")!=std::string::npos);
 #else
     bool expect_refusal = false;
 #endif
@@ -1329,6 +1333,17 @@ static void test_cmd_details() {
     change_dir(cwd);
   }
 
+  // CMDCMDLINE in options
+  {
+    std::string d = in_dir("cmdline&md,sfxdirC&x");
+    for (const char* f : {"-DX=%CMDCMDLINE%", "-DX=%cmdcmdline:~0,5%", "-DX=!CMDCMDLINE!"}) {
+      Dict o = jit_base();
+      o["flags"] = std::vector<std::string>{f};
+      expect_refusal("flags [" + esc(f) + "]", d, o, "Unsupported variable");
+    }
+    change_dir(cwd);
+  }
+
   // 5. %CD% in options
   {
     for (const char* n : {"cdplain", "cd&md,sfxdirC&x", "cd(x)", "cd^x", "cd%x", "cd!x", "cd space"}) {
@@ -1337,11 +1352,13 @@ static void test_cmd_details() {
       write_file(join(join(d, "inc"), "harness_inc.h"), "#define INC_VALUE 1000\n");
       Want wi;
       wi.square = 1049;
-      for (const char* form : {"%CD%", "%cd%", "%CD:~0%", "%CD:x=x%", "%__CD__%", "%cd:~0,200%"}) {
+      for (const char* form : {"%CD%", "%cd%", "%CD:~0%", "%CD:x=x%", "%__CD__%", "%cd:~0,200%",
+          "%CD:\\=/%"}) {
         RemoveDirectoryA(join(d, "sfxdirC").c_str());
         RemoveDirectoryA(join(root, "sfxdirC").c_str());
         Dict o = jit_base();
-        std::string fl = inc_flag() + form + (std::string(form)=="%__CD__%" ? "inc" : "\\inc");
+        std::string f = form;
+        std::string fl = inc_flag() + f + (f=="%__CD__%" ? "inc" : f=="%CD:\\=/%" ? "/inc" : "\\inc");
         o["flags"] = std::vector<std::string>{def_flag() + "USE_INC", fl};
         std::string what = "cwd " + esc(n) + " flags [" + esc(fl) + "]";
         bool awkward = std::string(n).find_first_of("&()^%!")!=std::string::npos;
