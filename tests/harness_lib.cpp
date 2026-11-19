@@ -1,5 +1,9 @@
 // The plugin source in a shared library, for loading with RTLD_DEEPBIND
+#ifdef HARNESS_CANDIDATE
+#include "../candidate/shell_compiler.cpp"
+#else
 #include "../src/shell_compiler.cpp"
+#endif
 
 namespace casadi {
 const Options ImporterInternal::options_ = {};

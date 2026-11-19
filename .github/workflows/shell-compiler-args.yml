@@ -11,7 +11,7 @@ concurrency:
 
 jobs:
   msvc:
-    name: msvc (${{ matrix.os }}, ${{ matrix.arch }}, thread=${{ matrix.thread }})
+    name: msvc (${{ matrix.os }}, ${{ matrix.arch }}, thread=${{ matrix.thread }}${{ matrix.candidate && ', candidate' || '' }})
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -22,6 +22,7 @@ jobs:
           - {os: windows-2022, arch: Win32, thread: "ON"}
           - {os: windows-2025, arch: x64, thread: "ON"}
           - {os: windows-11-arm, arch: ARM64, thread: "ON"}
+          - {os: windows-2022, arch: x64, thread: "ON", candidate: "ON"}
     defaults:
       run:
         shell: pwsh
@@ -36,7 +37,7 @@ jobs:
           exit 0
       - name: Build
         run: |
-          cmake -B build -A ${{ matrix.arch }} -DWITH_THREAD=${{ matrix.thread }}
+          cmake -B build -A ${{ matrix.arch }} -DWITH_THREAD=${{ matrix.thread }} -DCANDIDATE=${{ matrix.candidate || 'OFF' }}
           cmake --build build --config Release
       - name: argv_dump with gcc
         if: matrix.arch == 'x64'
@@ -188,17 +189,18 @@ jobs:
         run: bin/harness.exe --work "$env:HARNESS_WORK\g" --dump "mingw=$PWD\bin\argv_dump.exe" --jit gcc --only jit
 
   posix:
-    name: posix (${{ matrix.os }})
+    name: posix (${{ matrix.os }}, candidate=${{ matrix.candidate }})
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-24.04, macos-15]
+        candidate: ["OFF", "ON"]
     steps:
       - uses: actions/checkout@v4.1.1
       - name: Build
         run: |
-          cmake -B build -DCMAKE_BUILD_TYPE=Release
+          cmake -B build -DCMAKE_BUILD_TYPE=Release -DCANDIDATE=${{ matrix.candidate }}
           cmake --build build
       - name: Threads (cc)
         if: always()

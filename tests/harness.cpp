@@ -1,6 +1,10 @@
 // Tests for the argument handling helpers of the shell compiler plugin.
 // The plugin source is included verbatim; stubs/ provides the few casadi bits it needs.
+#ifdef HARNESS_CANDIDATE
+#include "../candidate/shell_compiler.cpp"
+#else
 #include "../src/shell_compiler.cpp"
+#endif
 
 namespace casadi {
 const Options ImporterInternal::options_ = {};
@@ -505,6 +509,7 @@ static void test_expand_posix() {
   auto expand = variant==0 ? casadi::expand : expand_fixed;
   section(variant==0 ? "expand: wordexp" : "expand: wordexp with candidate fix");
   set_env("HARNESS_A", "x[$(mkdir sfxdir26)]");
+  set_env("HARNESS_B", "x[`mkdir sfxdir27`]");
   set_env("HARNESS_V", "hello world");
   set_env("HARNESS_W", "$(mkdir sfxdir_w)");
   unset_env("HARNESS_UNDEF");
@@ -529,6 +534,9 @@ static void test_expand_posix() {
     {"", {}},
   };
   for (const Case& c : ok) {
+#ifdef HARNESS_CANDIDATE
+    if (c.in=="'$(x)'") continue;  // refused by design of the candidate fix
+#endif
     if (variant==1 && c.in=="'$(x)'") continue;  // refused by design of the candidate fix
     try {
       std::vector<std::string> e = expand(c.in);
@@ -552,6 +560,8 @@ static void test_expand_posix() {
     "${HARNESS_UNDEF:-\"$(mkdir sfxdir20)\"}", "${HARNESS_UNDEF:-'$(mkdir sfxdir21)'}",
     "${HARNESS_V#$(mkdir sfxdir22)}", "${HARNESS_V%`mkdir sfxdir23`}", "$((1+$(mkdir sfxdir24)))",
     "${HARNESS_UNDEF?$(mkdir sfxdir25)}", "${#HARNESS_V}", "$((1+2))", "$((HARNESS_A))",
+    "${HARNESS_V:HARNESS_A}", "${HARNESS_V:0:HARNESS_A}", "${HARNESS_V[HARNESS_A]}",
+    "${HARNESS_V:HARNESS_B}", "${HARNESS_V:1}", "${HARNESS_V/o/0}", "${HARNESS_V:-${HARNESS_B}}",
   };
   auto count = [&]() {
     int n = 0;
