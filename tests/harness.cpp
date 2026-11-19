@@ -1471,8 +1471,8 @@ static void test_cd_wide() {
   struct C { std::wstring name; const char* label; bool ok; };
   bool cp_single = GetACP()!=CP_UTF8;
   std::vector<C> cs = {
-    {L"a＂ -wrapper x ＂b", "a\\uFF02 -wrapper x \\uFF02b", false},
-    {L"été", "\\u00E9t\\u00E9", cp_single},
+    {L"a\uFF02 -wrapper x \uFF02b", "a\\uFF02 -wrapper x \\uFF02b", false},
+    {L"\u00E9t\u00E9", "\\u00E9t\\u00E9", cp_single},
     {L"plainwide", "plainwide", true},
   };
   for (const C& c : cs) {
@@ -1508,7 +1508,7 @@ static void test_cd_wide() {
   }
   // What a narrow program receives for U+FF02 in this process
   if (!g_dumps.empty()) {
-    std::wstring w = L"x＂y";
+    std::wstring w = L"x\uFF02y";
     char nb[16] = {0};
     BOOL used = FALSE;
     WideCharToMultiByte(CP_ACP, 0, w.c_str(), -1, nb, sizeof(nb), nullptr,
