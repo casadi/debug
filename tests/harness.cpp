@@ -650,6 +650,9 @@ static void test_win_run() {
   }
 }
 
+static const char* jit_source_probe();
+static bool jit_try_probe(const std::string& src, const std::string& outdir, std::string& err);
+
 // Child mode: started without a console
 static int console_probe(const std::string& out) {
   std::ostringstream ss;
@@ -675,6 +678,15 @@ static int console_probe(const std::string& out) {
     Dump b = parse_dump(read_file(g_outfile), 0);
     ss << "baseline_child_console " << b.console << "\n";
   }
+  if (g_jit!="none") {
+    std::string d = join(g_work, "probe jit & (x)");
+    make_dir(d);
+    std::string src = join(d, "jit src.c");
+    write_file(src, jit_source_probe());
+    std::string err;
+    bool ok = jit_try_probe(src, d + SEP, err);
+    ss << "probe_jit " << (ok ? "ok" : "failed: " + err) << "\n";
+  }
   write_file(out, ss.str());
   return 0;
 }
@@ -686,7 +698,7 @@ static void test_no_console() {
   std::string out = join(g_work, "probe.txt");
   remove(out.c_str());
   std::string cmd = casadi::quote(self) + " --work " + casadi::quote(g_work) + " --dump "
-    + casadi::quote(g_dumps[0].label + "=" + g_dumps[0].path) + " --console-probe "
+    + casadi::quote(g_dumps[0].label + "=" + g_dumps[0].path) + " --jit " + g_jit + " --console-probe "
     + casadi::quote(out);
   std::vector<char> buf(cmd.begin(), cmd.end());
   buf.push_back('\0');
@@ -706,6 +718,7 @@ static void test_no_console() {
   check(res.find("self_console 0")!=std::string::npos, "probe has no console");
   check(res.find("child_ret 0")!=std::string::npos, "child ran from a console-less parent");
   check(res.find("\nchild_console 2")==std::string::npos, "child got a visible console window");
+  if (g_jit!="none") check(res.find("probe_jit ok")!=std::string::npos, "JIT from a console-less parent");
 }
 
 static void test_batch_status() {
@@ -749,6 +762,7 @@ static void test_vs_setup() {
   std::string full;
   bool on_path = casadi::win_find("cl.exe", nullptr, full);
   std::cout << "   cl.exe on PATH: " << (on_path ? full : "no") << std::endl;
+  SetEnvironmentVariableW(L"HARNESS_UNI", L"\u00e9\u4e2d \U0001F600 x=y");
   std::string bat = Peek::vcvarsall();
   std::cout << "   vcvarsall: " << bat << std::endl;
   check(!bat.empty() && exists(bat), "vcvarsall.bat located");
@@ -778,6 +792,8 @@ static void test_vs_setup() {
     check(has(L"LIB="), a + ": LIB in environment");
     check(has(L"Path=") || has(L"PATH="), a + ": PATH in environment");
     check(!env->path.empty(), a + ": PATH captured");
+    check(blk.find(std::wstring(L"\0HARNESS_UNI=\u00e9\u4e2d \U0001F600 x=y\0", 23))!=std::wstring::npos,
+      a + ": non-ASCII variable preserved");
     check(env->block.size()>=2 && env->block[env->block.size()-1]==L'\0'
       && env->block[env->block.size()-2]==L'\0', a + ": block double-NUL terminated");
     std::string cl, link;
@@ -867,6 +883,11 @@ static bool jit_try(const std::string& src, const std::string& outdir, Dict opts
     err = e.what();
     return false;
   }
+}
+
+static const char* jit_source_probe() { return jit_source; }
+static bool jit_try_probe(const std::string& src, const std::string& outdir, std::string& err) {
+  return jit_try(src, outdir, jit_base(), 49, nullptr, err);
 }
 
 static std::vector<std::string> sentinels(const std::string& d) {
