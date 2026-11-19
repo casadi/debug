@@ -36,8 +36,8 @@
 
 #include <cstdlib>
 #include <cstring>
-#include <algorithm>
 #include <cctype>
+#include <sstream>
 
 #ifdef _WIN32
 #include <windows.h>
@@ -45,6 +45,8 @@
 #ifdef CASADI_WITH_THREAD
 #include <mutex>
 #endif // CASADI_WITH_THREAD
+#else // _WIN32
+#include <unistd.h>
 #endif // _WIN32
 
 namespace casadi {
@@ -74,7 +76,7 @@ namespace {
         si.hStdError = GetStdHandle(STD_ERROR_HANDLE);
       }
       // No console window when the parent has none
-      DWORD flags = GetConsoleWindow() ? 0 : CREATE_NO_WINDOW;
+      DWORD flags = GetConsoleCP() ? 0 : CREATE_NO_WINDOW;
       if (env) flags |= CREATE_UNICODE_ENVIRONMENT;
       std::vector<char> buf(cmd.begin(), cmd.end());
       buf.push_back('\0');
@@ -109,10 +111,13 @@ namespace {
       std::string e = s;
       DWORD n = ExpandEnvironmentStringsA(s.c_str(), nullptr, 0);
       if (n) {
-        e.resize(n);
-        n = ExpandEnvironmentStringsA(s.c_str(), &e[0], n);
-        e.resize(n ? strlen(e.c_str()) : 0);
-        if (!n) e = s;
+        e.resize(n+1);
+        DWORD m = ExpandEnvironmentStringsA(s.c_str(), &e[0], n+1);
+        if (m && m<=n+1) {
+          e.resize(strlen(e.c_str()));
+        } else {
+          e = s;
+        }
       }
       return e;
 #else // _WIN32
@@ -138,6 +143,8 @@ namespace {
         // cmd.exe expands % and ! also within quotes
         casadi_assert(s.find_first_of("%!\"")==std::string::npos,
           "Unsupported character in '" + s + "' for a command run through cmd.exe");
+        if (!s.empty() && s.find_first_not_of("abcdefghijklmnopqrstuvwxyz"
+            "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-+/.:@\\~#$")==std::string::npos) return s;
       } else if (!s.empty() && s.find_first_of(" \t\n\"")==std::string::npos) {
         return s;
       }
@@ -190,18 +197,52 @@ namespace {
       return i!=std::string::npos && e.find('%', i+2)!=std::string::npos;
     }
 
+    // Does cmd.exe end up outside quotes after an option?
+    bool cmd_balanced(const std::string& s) {
+      bool in_quotes = false;
+      for (size_t i=0; i<s.size(); ++i) {
+        if (s[i]=='"') {
+          in_quotes = !in_quotes;
+        } else if (!in_quotes && s[i]=='^' && ++i==s.size()) {
+          return false;
+        }
+      }
+      return !in_quotes;
+    }
+
+    // Current directory
+    std::string win_cwd() {
+      std::vector<char> buf(GetCurrentDirectoryA(0, nullptr) + 1);
+      DWORD n = GetCurrentDirectoryA(static_cast<DWORD>(buf.size()), buf.data());
+      return n && n<buf.size() ? std::string(buf.data(), n) : "";
+    }
+
     // Program of a command line, found as argv[0] by the MSVC runtime
     std::string program(const std::string& cmd) {
-      if (!cmd.empty() && cmd[0]=='"') return cmd.substr(1, cmd.find('"', 1)-1);
-      return cmd.substr(0, cmd.find_first_of(" \t"));
+      size_t b = cmd.find_first_not_of(" \t");
+      if (b==std::string::npos) return "";
+      if (cmd[b]=='"') return cmd.substr(b+1, cmd.find('"', b+1)-b-1);
+      return cmd.substr(b, cmd.find_first_of(" \t", b)-b);
+    }
+
+    // Extensions cmd.exe tries
+    std::vector<std::string> win_pathext() {
+      const char* pathext = getenv("PATHEXT");
+      std::stringstream ss(pathext ? pathext : ".COM;.EXE;.BAT;.CMD");
+      std::vector<std::string> r;
+      std::string e;
+      while (std::getline(ss, e, ';')) if (!e.empty()) r.push_back(e);
+      return r;
     }
 
     // Find a program on the PATH of an environment
-    bool win_find(const std::string& prog, const WinEnv* env, std::string& full) {
-      wchar_t wprog[MAX_PATH], wfull[MAX_PATH];
+    bool win_find(const std::string& prog, const WinEnv* env, std::string& full,
+        const std::string& ext=".exe") {
+      wchar_t wprog[MAX_PATH], wext[MAX_PATH], wfull[MAX_PATH];
       char afull[MAX_PATH];
       if (!MultiByteToWideChar(CP_ACP, 0, prog.c_str(), -1, wprog, MAX_PATH)) return false;
-      DWORD n = SearchPathW(env ? env->path.c_str() : nullptr, wprog, L".exe",
+      if (!MultiByteToWideChar(CP_ACP, 0, ext.c_str(), -1, wext, MAX_PATH)) return false;
+      DWORD n = SearchPathW(env ? env->path.c_str() : nullptr, wprog, wext,
         MAX_PATH, wfull, nullptr);
       if (n==0 || n>=MAX_PATH) return false;
       if (!WideCharToMultiByte(CP_ACP, 0, wfull, -1, afull, MAX_PATH, nullptr, nullptr)) {
@@ -211,14 +252,25 @@ namespace {
       return true;
     }
 
-    // Can a program be started without cmd.exe?
-    bool win_direct(const std::string& prog, const WinEnv* env) {
-      std::string f;
-      if (!win_find(prog, env, f)) return false;
+    // Is a file an executable that CreateProcess starts without cmd.exe?
+    bool win_exe(std::string f) {
       for (char& c : f) c = static_cast<char>(tolower(static_cast<unsigned char>(c)));
       if (f.size()>=8 && f.compare(f.size()-8, 8, "\\cmd.exe")==0) return false;
       return f.size()>=4 && (f.compare(f.size()-4, 4, ".exe")==0
         || f.compare(f.size()-4, 4, ".com")==0);
+    }
+
+    // Can a program be started without cmd.exe, which would find the same?
+    bool win_direct(const std::string& prog, const WinEnv* env) {
+      std::string f;
+      if (!win_find(prog, env, f) || !win_exe(f)) return false;
+      // cmd.exe could find a script with the same name
+      if (prog.find('.', prog.find_last_of("\\/:")+1)==std::string::npos) {
+        for (const std::string& e : win_pathext()) {
+          if (!win_exe(e) && win_find(prog, env, f, e)) return false;
+        }
+      }
+      return true;
     }
 #endif // _WIN32
 
@@ -240,7 +292,9 @@ namespace {
           size_t j = brace ? i+2 : i+1, k = j;
           while (k<e.size() && (isalnum(static_cast<unsigned char>(e[k])) || e[k]=='_')) k++;
           if (k>j && (!brace || (k<e.size() && e[k]=='}'))) {
-            const char* v = getenv(e.substr(j, k-j).c_str());
+            std::string name = e.substr(j, k-j);
+            char buf[4096];
+            const char* v = name=="PWD" ? getcwd(buf, sizeof(buf)) : getenv(name.c_str());
             if (v) r += v;
             i = brace ? k : k-1;
             continue;
@@ -277,15 +331,15 @@ namespace {
 #endif // CASADI_WITH_THREAD
       std::string key = bat + " " + args;
       auto it = cache.find(key);
-      if (it!=cache.end()) return &it->second;
+      if (it!=cache.end()) return it->second.block.empty() ? nullptr : &it->second;
 
       const char* comspec = getenv("ComSpec");
-      std::string cmd = quote(comspec ? comspec : "cmd.exe", false) + " /u /d /s /c \""
-        + quote(bat, true) + " " + args + " >nul && set\"";
+      std::string cmd = quote(comspec ? comspec : "cmd.exe", false)
+        + " /u /d /s /c \"set VSCMD_SKIP_SENDTELEMETRY=1&& " + quote(bat, true) + " " + args
+        + " >nul && set\"";
       std::string out;
       std::string dir = bat.substr(0, bat.find_last_of("\\/"));
-      casadi_assert(win_run(cmd, nullptr, &out, dir.c_str())==0,
-        "Environment setup failed. Tried '" + cmd + "'");
+      if (win_run(cmd, nullptr, &out, dir.c_str())) out.clear();
 
       // Output is UTF-16, one NAME=value per line
       std::wstring wout(reinterpret_cast<const wchar_t*>(out.data()), out.size()/sizeof(wchar_t));
@@ -303,9 +357,9 @@ namespace {
         env.block += line;
         env.block += L'\0';
       }
-      casadi_assert(!env.block.empty(), "Environment setup failed. Tried '" + cmd + "'");
-      env.block += L'\0';
-      return &(cache[key] = env);
+      if (!env.block.empty()) env.block += L'\0';
+      const WinEnv& r = cache[key] = env;
+      return r.block.empty() ? nullptr : &r;
     }
 
     // Locate vcvarsall.bat of the latest Visual Studio with a C++ toolset
@@ -333,9 +387,10 @@ namespace {
     // Use the full path of the program
     void win_resolve(std::string& cmd, const WinEnv* env) {
       std::string prog = program(cmd), full;
+      cmd.erase(0, cmd.find_first_not_of(" \t"));
       size_t end = cmd[0]=='"' ? prog.size()+2 : prog.size();
       if (win_find(prog, env, full)) {
-        cmd = quote(full, false) + cmd.substr(std::min(end, cmd.size()));
+        cmd = quote(full, false) + (end<cmd.size() ? cmd.substr(end) : "");
       }
     }
 #endif // _WIN32
@@ -556,8 +611,11 @@ namespace {
     // Set up Visual Studio if cl.exe is not on the PATH
     const WinEnv* env = nullptr;
     std::string prog = program(expand(compiler)), full;
-    if ((_stricmp(prog.c_str(), "cl")==0 || _stricmp(prog.c_str(), "cl.exe")==0)
-        && !win_find(prog, nullptr, full)) {
+    bool found = false;
+    for (const std::string& e : win_pathext()) {
+      if (win_find(prog, nullptr, full, e)) found = true;
+    }
+    if ((_stricmp(prog.c_str(), "cl")==0 || _stricmp(prog.c_str(), "cl.exe")==0) && !found) {
       std::string bat = vcvarsall();
       if (!bat.empty()) {
 #if defined(_M_ARM64) || defined(__aarch64__)
@@ -567,17 +625,26 @@ namespace {
 #else
         env = win_env(bat, "x86");
 #endif
-        casadi_assert(win_find(prog, env, full),
-          "Visual Studio setup with '" + bat + "' did not provide " + prog);
+        // Otherwise as before
+        if (env && !win_find(prog, env, full)) env = nullptr;
       }
     }
     for (const std::string& s : {compiler, linker}) {
       if (!win_direct(program(expand(s)), env)) shell = true;
     }
     if (shell) {
-      // CasADi's paths must not end up between quotes
       for (const std::string& s : all) {
-        casadi_assert(std::count(s.begin(), s.end(), '"')%2==0, "Unbalanced quotes in '" + s + "'");
+        // CasADi's paths must not end up between quotes
+        casadi_assert(cmd_balanced(s) && cmd_balanced(expand(s)),
+          "Unbalanced quotes or trailing ^ in '" + s + "'");
+        // Nor the current directory, which cmd.exe would expand unquoted
+        std::string u = s;
+        for (char& c : u) c = static_cast<char>(toupper(static_cast<unsigned char>(c)));
+        if (u.find("%CD%")!=std::string::npos || u.find("%__CD__%")!=std::string::npos
+            || u.find("%=")!=std::string::npos) {
+          casadi_assert(win_cwd().find_first_of("&|<>^()%!\"")==std::string::npos,
+            "Unsupported character in the current directory for '" + s + "'");
+        }
       }
     }
 #endif // _WIN32

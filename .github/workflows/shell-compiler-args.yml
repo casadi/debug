@@ -42,6 +42,12 @@ jobs:
           if (Test-Path build/argv_dump_gcc.exe) { $d += "--dump", "mingw=$PWD\build\argv_dump_gcc.exe" }
           "HARNESS_WORK=$w" | Out-File -Append $env:GITHUB_ENV
           "HARNESS_DUMPS=$($d -join '|')" | Out-File -Append $env:GITHUB_ENV
+      - name: First JIT timing (cl)
+        if: always()
+        run: build/Release/harness.exe --work "$env:HARNESS_WORK\time" @($env:HARNESS_DUMPS -split '\|') --jit cl --only vstime
+      - name: Failing Visual Studio setup (cl)
+        if: always()
+        run: build/Release/harness.exe --work "$env:HARNESS_WORK\vsf" @($env:HARNESS_DUMPS -split '\|') --jit cl --only vsfail
       - name: Threads, first Visual Studio setup (cl)
         if: always()
         run: build/Release/harness.exe --work "$env:HARNESS_WORK\t" @($env:HARNESS_DUMPS -split '\|') --jit cl --only threads
@@ -52,7 +58,7 @@ jobs:
         if: always() && matrix.arch == 'x64'
         run: |
           if (-not (Get-Command gcc -ErrorAction SilentlyContinue)) { "no gcc"; exit 0 }
-          build/Release/harness.exe --work "$env:HARNESS_WORK\g" @($env:HARNESS_DUMPS -split '\|') --jit gcc --only jit --only wrap
+          build/Release/harness.exe --work "$env:HARNESS_WORK\g" @($env:HARNESS_DUMPS -split '\|') --jit gcc --only jit --only wrap --only details
       - name: JIT tests with DelayedExpansion enabled (cl)
         if: always() && matrix.thread == 'ON'
         run: |
@@ -91,7 +97,7 @@ jobs:
           cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
           cmake --build build
       - name: Tests (cl)
-        run: build/harness.exe --work "$env:RUNNER_TEMP\work dir" --dump "msvc=$PWD\build\argv_dump.exe" --jit cl --only jit --only vs --only quote --only wrap
+        run: build/harness.exe --work "$env:RUNNER_TEMP\work dir" --dump "msvc=$PWD\build\argv_dump.exe" --jit cl --only jit --only vs --only quote --only wrap --only details --only console
 
   mingw-native:
     name: mingw (windows-2022, runner gcc)
@@ -117,7 +123,7 @@ jobs:
         run: build/harness.exe --work "$env:HARNESS_WORK\a" --dump "mingw=$PWD\build\argv_dump.exe" --jit cl
       - name: JIT tests (gcc)
         if: always()
-        run: build/harness.exe --work "$env:HARNESS_WORK\g" --dump "mingw=$PWD\build\argv_dump.exe" --jit gcc --only jit --only threads --only wrap
+        run: build/harness.exe --work "$env:HARNESS_WORK\g" --dump "mingw=$PWD\build\argv_dump.exe" --jit gcc --only jit --only threads --only wrap --only details
 
   mingw-cross-build:
     name: mingw cross build (dockcross windows-shared-x64-posix)
@@ -173,7 +179,7 @@ jobs:
         run: bin/harness.exe --work "$env:HARNESS_WORK\a" --dump "mingw=$PWD\bin\argv_dump.exe" --jit cl
       - name: JIT tests (gcc)
         if: always()
-        run: bin/harness.exe --work "$env:HARNESS_WORK\g" --dump "mingw=$PWD\bin\argv_dump.exe" --jit gcc --only jit --only wrap
+        run: bin/harness.exe --work "$env:HARNESS_WORK\g" --dump "mingw=$PWD\bin\argv_dump.exe" --jit gcc --only jit --only wrap --only details
 
   posix:
     name: posix (${{ matrix.os }})

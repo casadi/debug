@@ -31,6 +31,8 @@ using casadi::ShellCompiler;
 // Expose the protected static helper
 struct Peek : ShellCompiler {
   using ShellCompiler::vcvarsall;
+  using ShellCompiler::vcvarsall_;
+  using ShellCompiler::vcvarsall_searched_;
 };
 #endif
 
@@ -479,6 +481,19 @@ static int console_probe(const std::string& out) {
   return 0;
 }
 
+// Child mode: hidden console, stdout redirected by the parent
+static int console_probe2() {
+  std::cout << "probe2 console_cp " << GetConsoleCP() << " window " << (GetConsoleWindow() ? 1 : 0)
+            << std::endl;
+  unset_env("ADUMP_OUT");
+  int ret = casadi::run(casadi::quote(g_dumps[0].path, false) + " fromdirect", false, nullptr);
+  std::cout << "probe2 direct_ret " << ret << std::endl;
+  ret = casadi::run(casadi::quote(g_dumps[0].path, false) + " fromshell", true, nullptr);
+  std::cout << "probe2 shell_ret " << ret << std::endl;
+  std::cout << "probe2_done" << std::endl;
+  return 0;
+}
+
 static void test_no_console() {
   section("win_run: parent without console");
   char self[MAX_PATH];
@@ -508,6 +523,39 @@ static void test_no_console() {
   check(res.find("\nshell_child_ret 0")!=std::string::npos, "shell child ran");
   check(res.find("child_console 2")==std::string::npos, "child got a visible console window");
   if (g_jit!="none") check(res.find("probe_jit ok")!=std::string::npos, "JIT from a console-less parent");
+
+  // Parent with a hidden console and redirected stdout
+  section("win_run: parent with a hidden console");
+  std::string log = join(g_work, "probe2 log.txt");
+  SECURITY_ATTRIBUTES sa = {sizeof(SECURITY_ATTRIBUTES), nullptr, TRUE};
+  HANDLE f = CreateFileA(log.c_str(), GENERIC_WRITE, FILE_SHARE_READ, &sa, CREATE_ALWAYS,
+    FILE_ATTRIBUTE_NORMAL, nullptr);
+  std::string cmd2 = casadi::quote(self, false) + " --work " + casadi::quote(g_work, false)
+    + " --dump " + casadi::quote(g_dumps[0].label + "=" + g_dumps[0].path, false)
+    + " --console-probe2 x";
+  std::vector<char> buf2(cmd2.begin(), cmd2.end());
+  buf2.push_back('\0');
+  ZeroMemory(&si, sizeof(si));
+  si.cb = sizeof(si);
+  si.dwFlags = STARTF_USESTDHANDLES;
+  si.hStdInput = GetStdHandle(STD_INPUT_HANDLE);
+  si.hStdOutput = f;
+  si.hStdError = f;
+  ok = CreateProcessA(nullptr, buf2.data(), nullptr, nullptr, TRUE, CREATE_NO_WINDOW,
+    nullptr, nullptr, &si, &pi);
+  check(ok, "start hidden-console probe");
+  if (!ok) return;
+  WaitForSingleObject(pi.hProcess, 120000);
+  CloseHandle(pi.hProcess);
+  CloseHandle(pi.hThread);
+  CloseHandle(f);
+  res = read_file(log);
+  std::cout << res;
+  check(res.find("probe2_done")!=std::string::npos, "hidden-console probe finished");
+  check(res.find("a 66726f6d646972656374")!=std::string::npos,
+    "child output (direct) reaches the parent's redirected stdout");
+  check(res.find("a 66726f6d7368656c6c")!=std::string::npos,
+    "child output (cmd.exe) reaches the parent's redirected stdout");
 }
 
 static void test_vs_setup() {
@@ -1030,6 +1078,252 @@ static void test_modes() {
 }
 
 #ifdef _WIN32
+static std::string native_arch() {
+#if defined(_M_ARM64) || defined(__aarch64__)
+  return "arm64";
+#elif defined(_WIN64)
+  return "x64";
+#else
+  return "x86";
+#endif
+}
+
+// Caret handling, PATHEXT, plain paths, %CD%
+static void test_cmd_details() {
+  section("cmd.exe details (" + g_jit + ")");
+  const char* rt = getenv("RUNNER_TEMP");
+  std::string root = join(rt ? rt : g_work, "details_" + g_jit);
+  make_dir(root);
+  std::string cwd = current_dir();
+  std::string err;
+  Want w;
+  auto in_dir = [&](const std::string& n) {
+    std::string d = join(root, n);
+    make_dir(d);
+    change_dir(d);
+    std::string src = join(d, "jitsrc.c");
+    write_file(src, jit_source);
+    return d;
+  };
+  auto sfx = [&](const std::string& d) {
+    std::vector<std::string> r = sentinels(d);
+    for (const char* m : {"sfxdirQ", "sfxdirC", "sfxdir"}) {
+      if (exists(join(d, m))) r.push_back(join(d, m));
+      if (exists(join(root, m))) r.push_back(join(root, m));
+    }
+    return r;
+  };
+  auto expect_refusal = [&](const std::string& what, const std::string& d, Dict o,
+      const std::string& msg) {
+    bool ok = jit_try(join(d, "jitsrc.c"), d + SEP, o, w, err);
+    check(!ok && err.find(msg)!=std::string::npos, what + ": expected '" + msg + "', got "
+      + (ok ? std::string("success") : err.substr(0, 200)));
+    std::vector<std::string> x = sfx(d);
+    check(x.empty(), what + ": side effect " + vesc(x));
+  };
+  auto expect_ok = [&](const std::string& what, const std::string& d, Dict o, const Want& want) {
+    bool ok = jit_try(join(d, "jitsrc.c"), d + SEP, o, want, err);
+    check(ok, what + ": " + err.substr(0, 300));
+    std::vector<std::string> x = sfx(d);
+    check(x.empty(), what + ": side effect " + vesc(x));
+  };
+
+  // 1. Carets and quotes
+  set_env("HARNESS_CQ", "a^\"b");
+  set_env("HARNESS_OQ", "a\"b");
+  for (const char* n : {"R&md,sfxdirQ&b x", "a&mkdir sfxdirQ&b"}) {
+    std::string d = in_dir(n);
+    std::string dn = esc(n);
+    Dict o = jit_base();
+    o["flags"] = std::vector<std::string>{def_flag() + "X=^\"y\""};
+    expect_refusal("cwd " + dn + " flags [" + esc(def_flag() + "X=^\"y\"") + "]", d, o,
+      "Unbalanced quotes or trailing ^");
+    o = jit_base();
+    o["flags"] = std::vector<std::string>{">nul"};
+    o["compiler_output_flag"] = g_jit=="cl" ? "/Fo^" : "-o^";
+    expect_refusal("cwd " + dn + " compiler_output_flag ending in ^", d, o,
+      "Unbalanced quotes or trailing ^");
+    o = jit_base();
+    o["flags"] = std::vector<std::string>{"%HARNESS_CQ%", ">nul"};
+    expect_refusal("cwd " + dn + " flag %HARNESS_CQ%=a^\"b", d, o, "Unbalanced quotes");
+    o = jit_base();
+    o["flags"] = std::vector<std::string>{"%HARNESS_OQ%", ">nul"};
+    expect_refusal("cwd " + dn + " flag %HARNESS_OQ%=a\"b", d, o, "Unbalanced quotes");
+    o = jit_base();
+    o["flags"] = std::vector<std::string>{def_flag() + "TAG=^\"v1^\""};
+    Want wt;
+    wt.tag = "v1";
+    expect_ok("cwd " + dn + " flags [" + esc(def_flag() + "TAG=^\"v1^\"") + "]", d, o, wt);
+    o = jit_base();
+    o["flags"] = std::vector<std::string>{def_flag() + "TAG=a^&b"};
+    wt.tag = "a&b";
+    expect_ok("cwd " + dn + " flags [" + esc(def_flag() + "TAG=a^&b") + "]", d, o, wt);
+    change_dir(cwd);
+  }
+
+  // 2. PATHEXT: a script with the compiler's name
+  if (g_jit=="gcc") {
+    std::string wrap = join(root, "pathext wrap");
+    make_dir(wrap);
+    std::string marker = join(root, "pathext_marker.txt");
+    write_file(join(wrap, "gcc.bat"), "@echo ran>>\"" + marker + "\"\r\n@gcc.exe %*\r\n");
+    const char* path = getenv("PATH");
+    std::string old_path = path ? path : "";
+    set_env("PATH", wrap + ";" + old_path);
+    std::string d = in_dir("pathext");
+    remove(marker.c_str());
+    Dict o = jit_base();
+    expect_ok("gcc.bat first on PATH", d, o, w);
+    check(exists(marker), "gcc.bat first on PATH: wrapper ran");
+    set_env("PATH", old_path);
+    // In the current directory
+    std::string d2 = in_dir("pathext cwd");
+    write_file(join(d2, "gcc.bat"), "@echo ran>>\"" + marker + "\"\r\n@gcc.exe %*\r\n");
+    remove(marker.c_str());
+    expect_ok("gcc.bat in the current directory", d2, jit_base(), w);
+    check(exists(marker), "gcc.bat in the current directory: wrapper ran");
+    change_dir(cwd);
+  }
+  if (g_jit=="cl") {
+    std::string wrap = join(root, "clwrap");
+    make_dir(wrap);
+    std::string marker = join(root, "cl_marker.txt");
+    std::string bat = Peek::vcvarsall();
+    write_file(join(wrap, "cl.bat"), "@echo ran>>\"" + marker + "\"\r\n@call \"" + bat + "\" "
+      + native_arch() + " >nul\r\n@cl.exe %*\r\n");
+    write_file(join(wrap, "lk.bat"), "@call \"" + bat + "\" " + native_arch()
+      + " >nul\r\n@link.exe %*\r\n");
+    const char* path = getenv("PATH");
+    std::string old_path = path ? path : "";
+    set_env("PATH", wrap + ";" + old_path);
+    std::string d = in_dir("clbat");
+    remove(marker.c_str());
+    Dict o = jit_base();
+    o["compiler"] = "cl";
+    o["linker"] = "lk";
+    expect_ok("user cl.bat on PATH", d, o, w);
+    check(exists(marker), "user cl.bat on PATH: wrapper ran");
+    set_env("PATH", old_path);
+    change_dir(cwd);
+  }
+
+  // 4. Plain paths stay unquoted with cmd.exe
+  {
+    std::string wrap = join(root, "argwrap");
+    make_dir(wrap);
+    std::string args = join(root, "args.txt");
+    std::string real = g_jit=="cl" ? "@call \"" + Peek::vcvarsall() + "\" " + native_arch()
+      + " >nul\r\n@cl.exe %*\r\n" : "@gcc.exe %*\r\n";
+    write_file(join(wrap, "argcc.bat"), "@echo %*>\"" + args + "\"\r\n@set SRC=%1\r\n" + real);
+    std::string link = g_jit=="cl" ? "@call \"" + Peek::vcvarsall() + "\" " + native_arch()
+      + " >nul\r\n@link.exe %*\r\n" : "@gcc.exe %*\r\n";
+    write_file(join(wrap, "argld.bat"), link);
+    for (const char* n : {"plainpath", "with space", "amp&x"}) {
+      std::string d = in_dir(std::string("q_") + n);
+      Dict o = jit_base();
+      o["compiler"] = join(wrap, "argcc.bat");
+      o["linker"] = join(wrap, "argld.bat");
+      o["name"] = "plainobj";
+      o["temp_suffix"] = false;
+      expect_ok(std::string("argument capture, dir ") + esc(n), d, o, w);
+      std::string got = read_file(args);
+      while (!got.empty() && (got.back()=='\n' || got.back()=='\r' || got.back()==' ')) got.pop_back();
+      std::string src = join(d, "jitsrc.c"), obj = join(d, "plainobj.obj");
+      bool plain = std::string(n)=="plainpath";
+      std::string q = plain ? "" : "\"";
+      std::string want = (g_jit=="cl" ? "/c " : "-c ") + q + src + q + " "
+        + (g_jit=="cl" ? "/Fo" : "-o ") + q + obj + q;
+      check(got==want, std::string("argument capture, dir ") + esc(n) + ": got " + esc(got)
+        + ", expected " + esc(want));
+    }
+    change_dir(cwd);
+  }
+
+  // 5. %CD% in options
+  {
+    for (const char* n : {"cdplain", "cd&md,sfxdirC&x", "cd(x)", "cd^x", "cd%x", "cd!x", "cd space"}) {
+      std::string d = in_dir(n);
+      make_dir(join(d, "inc"));
+      write_file(join(join(d, "inc"), "harness_inc.h"), "#define INC_VALUE 1000\n");
+      Want wi;
+      wi.square = 1049;
+      for (const char* form : {"%CD%", "%cd%", "%CD:~0%", "%CD:x=x%", "%__CD__%"}) {
+        Dict o = jit_base();
+        std::string fl = inc_flag() + form + (std::string(form)=="%__CD__%" ? "inc" : "\\inc");
+        o["flags"] = std::vector<std::string>{def_flag() + "USE_INC", fl};
+        std::string what = "cwd " + esc(n) + " flags [" + esc(fl) + "]";
+        bool awkward = std::string(n).find_first_of("&()^%!")!=std::string::npos;
+        if (std::string(n)=="cd space") {
+          bool ok = jit_try(join(d, "jitsrc.c"), d + SEP, o, wi, err);
+          note(what + ": " + (ok ? "ok" : err.substr(0, 120)));
+          continue;
+        }
+        if (awkward) {
+          bool ok = jit_try(join(d, "jitsrc.c"), d + SEP, o, wi, err);
+          std::vector<std::string> x = sfx(d);
+          check(x.empty(), what + ": side effect " + vesc(x));
+          check(!ok && err.find("current directory")!=std::string::npos, what
+            + ": expected 'Unsupported character in the current directory', got "
+            + (ok ? std::string("success") : err.substr(0, 200)));
+        } else {
+          expect_ok(what, d, o, wi);
+        }
+      }
+    }
+    change_dir(cwd);
+  }
+}
+
+// Visual Studio setup that fails: JIT as without the setup
+static void test_vs_fail() {
+  section("Visual Studio setup failures (" + g_jit + ")");
+  std::string real = Peek::vcvarsall();
+  std::string d = join(g_work, "vsfail");
+  make_dir(d);
+  std::string src = join(d, "jit src.c");
+  write_file(src, jit_source);
+  struct B { std::string name, body; };
+  std::vector<B> bs = {
+    {"exit1.bat", "@exit /b 1\r\n"},
+    {"nocl.bat", "@set HARNESS_FROM_BAT=1\r\n"},
+    {"bogus.bat", "@call \"" + real + "\" bogus_arch\r\n"},
+    {"empty.bat", ""},
+  };
+  for (const B& b : bs) {
+    std::string bat = join(d, b.name);
+    write_file(bat, b.body);
+    Peek::vcvarsall_ = bat;
+    Peek::vcvarsall_searched_ = true;
+    std::string err;
+    bool ok = jit_try(src, d + SEP, jit_base(), Want(), err);
+    check(!ok && err.find("Environment setup failed")==std::string::npos
+      && err.find("Compilation failed")!=std::string::npos,
+      "vcvarsall " + b.name + ": expected 'Compilation failed', got " + (ok ? "success" : err.substr(0, 250)));
+  }
+  Peek::vcvarsall_ = real;
+}
+
+static void test_vs_time() {
+  section("first JIT timing (" + g_jit + ")");
+  std::string d = join(g_work, "vstime");
+  make_dir(d);
+  std::string src = join(d, "jit src.c");
+  write_file(src, jit_source);
+  std::string err;
+  for (int i=0; i<2; ++i) {
+    DWORD t0 = GetTickCount();
+    bool ok = jit_try(src, d + SEP, jit_base(), Want(), err);
+    DWORD t1 = GetTickCount();
+    std::cout << "   JIT " << (i ? "second" : "first") << ": " << (t1-t0) << " ms" << std::endl;
+    check(ok, "timed JIT: " + err);
+  }
+  DWORD t0 = GetTickCount();
+  casadi::win_env(Peek::vcvarsall(), "x64_x86");
+  std::cout << "   win_env x64_x86 alone: " << (GetTickCount()-t0) << " ms" << std::endl;
+}
+#endif
+
+#ifdef _WIN32
 // Compiler started through a batch file wrapper, without cmd.exe syntax in options
 static void test_bat_wrapper() {
   section("JIT with a batch file as compiler (" + g_jit + ")");
@@ -1155,6 +1449,9 @@ int main(int argc, char** argv) {
       g_jit = argv[++i];
     } else if (a=="--only" && i+1<argc) {
       only.push_back(argv[++i]);
+    } else if (a=="--console-probe2" && i+1<argc) {
+      ++i;
+      probe = "\x02";
     } else if (a=="--console-probe" && i+1<argc) {
       probe = argv[++i];
     } else {
@@ -1166,6 +1463,7 @@ int main(int argc, char** argv) {
   make_dirs(g_work);
   g_outfile = join(g_work, probe.empty() ? "adump.txt" : "adump_probe.txt");
 #ifdef _WIN32
+  if (probe=="\x02") return console_probe2();
   if (!probe.empty()) return console_probe(probe);
 #endif
   auto want = [&](const std::string& s) {
@@ -1221,6 +1519,9 @@ int main(int argc, char** argv) {
   }
 #ifdef _WIN32
   if (want("wrap") && g_jit!="none") test_bat_wrapper();
+  if (want("details") && g_jit!="none") test_cmd_details();
+  if (only.size() && want("vsfail") && g_jit=="cl") test_vs_fail();
+  if (only.size() && want("vstime") && g_jit=="cl") test_vs_time();
 #endif
   std::cout << "SUMMARY pass=" << n_pass << " fail=" << n_fail << " note=" << n_note << std::endl;
   return n_fail ? 1 : 0;
