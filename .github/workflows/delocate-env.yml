@@ -1,0 +1,76 @@
+name: delocate CI-env slowness (DYLD_LIBRARY_PATH / SDKROOT)
+
+on: [push, workflow_dispatch]
+
+env:
+  OLD: e821156cca18e784e5d23b6e962184e7feda9e0b
+  NEW: batch-install-names
+  SKIP: libknitro:libhsl:libworhp:libsnopt7:libut:libmex:libmx:libeng:libmadnlp_c:libMad:libmosek64:libxprs:libonnxruntime:libipmc:libconopt:libconopt.so.4:libonnxruntime.so.1
+  W: dummy-1.0-cp39-none-macosx_10_13_x86_64.macosx_10_13_intel.whl
+
+jobs:
+  env:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4.1.1
+      # Same as matlab-osx in casadi binaries.yml
+      - uses: casadi/action-setup-compiler@master
+        with:
+          cache-suffix: ''
+          target: arm64
+      - name: Inputs (as in delocate-batch.yml)
+        shell: bash -el {0}
+        run: |
+          curl -fsSLO https://github.com/casadi/casadi/releases/download/nightly-main/casadi-main-osx-arm64-octave7.3.0.zip
+          curl -fsSLO https://github.com/casadi/mockups/releases/download/v116/mockups_macos-15_arm64_Release.zip
+          unzip -q mockups_macos-15_arm64_Release.zip -d mockups
+          mkdir tree && unzip -q casadi-main-osx-arm64-octave7.3.0.zip -d tree
+          /usr/bin/python3 scripts/perturb.py tree
+          /usr/bin/python3 scripts/mkwheel.py tree $W
+          echo "CI_DYLD=$COMPILER_LIB_SEARCH_PATH:$PWD/mockups/octave/lib" >> $GITHUB_ENV
+          echo "CI_SDKROOT=$SDKROOT" >> $GITHUB_ENV
+      # Same as universal_grafter
+      - uses: conda-incubator/setup-miniconda@77236efeba76d591229f44c36f2469426cc33dec
+        with:
+          python-version: 3.9
+          auto-update-conda: true
+          channels: conda-forge, anaconda
+          activate-environment: grafting
+      - name: Which tools, which env
+        shell: bash -el {0}
+        run: |
+          echo "SDKROOT=$SDKROOT CI_DYLD=$CI_DYLD"
+          which python; python --version
+          type -a otool install_name_tool || true
+          xcrun --find otool; xcrun --show-sdk-path || true
+          ls $COMPILER_LIB_SEARCH_PATH | grep -E "libc\+\+|cctools" | head
+          ls /Users/runner/miniconda3/envs/compiler/bin | grep -E "otool|install_name" | head
+          echo $PATH | tr : '\n' | head -15
+      - name: Microbenchmark (100 calls each)
+        shell: bash -el {0}
+        run: python scripts/bench.py tree/libcasadi.dylib 100
+      - name: Install old and new delocate
+        shell: bash -el {0}
+        run: |
+          pip -q install "git+https://github.com/jgillis/delocate.git@$OLD" --target d_old
+          pip -q install "git+https://github.com/jgillis/delocate.git@$NEW" --target d_new
+      - name: Full delocate-wheel runs
+        shell: bash -el {0}
+        run: |
+          run() {  # name, delocate dir, env assignments...
+            name=$1; dir=$2; shift 2
+            mkdir in_$name out_$name; cp $W in_$name/
+            s=$(date +%s)
+            env "$@" PYTHONPATH=$PWD/$dir python -m delocate.cmd.delocate_wheel -k -w out_$name -L "" --skip-libs "$SKIP" in_$name/$W > log_$name.txt 2>&1 \
+              || { echo "$name FAILED"; tail -20 log_$name.txt; }
+            echo "TIME $name: $(( $(date +%s) - s )) s"
+          }
+          run old_ci    d_old DYLD_LIBRARY_PATH=$CI_DYLD SDKROOT=$CI_SDKROOT
+          run new_ci    d_new DYLD_LIBRARY_PATH=$CI_DYLD SDKROOT=$CI_SDKROOT
+          run new_clean d_new -u SDKROOT DYLD_LIBRARY_PATH=$PWD/mockups/octave/lib
+          for n in old_ci new_ci new_clean; do grep -c "dyld\[" log_$n.txt | sed "s/^/dyld warnings $n: /"; done
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: env-results
+          path: log_*.txt
