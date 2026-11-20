@@ -29,9 +29,6 @@
 #include "casadi/core/importer_internal.hpp"
 #include <casadi/solvers/casadi_importer_shell_export.h>
 #include "casadi/core/plugin_interface.hpp"
-#ifdef CASADI_WITH_THREAD
-#include <mutex>
-#endif // CASADI_WITH_THREAD
 
 /** \defgroup plugin_Importer_shell Title
     \par
@@ -108,16 +105,6 @@ namespace casadi {
 
     // Shared library handle
     handle_t handle_;
-
-#ifdef _WIN32
-    // vcvarsall.bat of the latest Visual Studio, located with vswhere once
-    static std::string vcvarsall();
-    static std::string vcvarsall_;
-    static bool vcvarsall_searched_;
-#ifdef CASADI_WITH_THREAD
-    static std::mutex mutex_vcvarsall_;
-#endif // CASADI_WITH_THREAD
-#endif // _WIN32
   };
 
 } // namespace casadi

@@ -15,6 +15,7 @@ const std::string ShellCompiler::meta_doc = "";
 #include <fstream>
 #include <random>
 #include <thread>
+#include <atomic>
 #include <set>
 #include <sys/stat.h>
 #ifdef _WIN32
@@ -28,12 +29,11 @@ using casadi::Dict;
 using casadi::ShellCompiler;
 
 #ifdef _WIN32
-// Expose the protected static helper
-struct Peek : ShellCompiler {
-  using ShellCompiler::vcvarsall;
-  using ShellCompiler::vcvarsall_;
-  using ShellCompiler::vcvarsall_searched_;
-};
+// vcvarsall.bat as located by the plugin, once
+static std::string vcvarsall() {
+  static const std::string bat = casadi::win_vcvarsall();
+  return bat;
+}
 #endif
 
 // ---------------------------------------------------------------- reporting
@@ -308,7 +308,7 @@ static void test_quote_roundtrip() {
       std::string msg;
       bool refused = refuses(s, &msg);
 #ifdef _WIN32
-      bool should = s.find_first_of("%!\"")!=std::string::npos;
+      bool should = s.find_first_of("%!\"^")!=std::string::npos;
       for (char c : s) if (static_cast<unsigned char>(c)<0x20) should = true;
       if (non_ascii(s) && !casadi::win_bytes_safe()) should = true;
       check(refused==should, "quote(" + esc(s) + ") refused=" + std::to_string(refused));
@@ -382,10 +382,27 @@ static void test_units() {
   std::vector<I> is = {
     {"C:\\a b", "C:\\a b"}, {"\"C:\\a b\"", "C:\\a b"}, {"%HARNESS_V%", "hello world"},
     {"\"%HARNESS_V%\"", "hello world"}, {"\"a\"b\"", "a\"b"}, {"\"", "\""}, {"\"\"", ""},
+    {" C:\\a b ", "C:\\a b"}, {"\t\"C:\\a b\"\r\n", "C:\\a b"}, {" \t\r\n", ""},
+    {" \"%HARNESS_V%\"\t", "hello world"}, {"\" a \"", " a "},
   };
   for (const I& c : is) {
     std::string got = casadi::include_dir(c.in);
     check(got==c.want, "include_dir(" + esc(c.in) + ")=" + esc(got) + ", expected " + esc(c.want));
+  }
+
+  section("win_bytes_safe");
+  {
+    char acp[16] = "";
+    DWORD size = sizeof(acp);
+    LSTATUS st = RegGetValueA(HKEY_LOCAL_MACHINE, "SYSTEM\\CurrentControlSet\\Control\\Nls\\CodePage",
+      "ACP", RRF_RT_REG_SZ, nullptr, acp, &size);
+    CPINFO cp;
+    GetCPInfo(CP_ACP, &cp);
+    bool want = st==ERROR_SUCCESS && std::to_string(GetACP())==acp
+      && (GetACP()==CP_UTF8 || cp.MaxCharSize==1);
+    std::cout << "   process ACP " << GetACP() << ", system ACP " << acp << ", MaxCharSize "
+      << cp.MaxCharSize << std::endl;
+    check(casadi::win_bytes_safe()==want, "win_bytes_safe()=" + std::to_string(casadi::win_bytes_safe()));
   }
 
   section("expand: %VAR%");
@@ -419,7 +436,7 @@ static void test_win_run() {
   }
   unset_env("ADUMP_EXIT");
   {
-    int ret = casadi::win_run("no_such_program_harness.exe x", nullptr);
+    int ret = casadi::win_run("no_such_program_harness.exe", "no_such_program_harness.exe x", nullptr);
     check(ret==-1, "win_run: nonexistent program gave " + std::to_string(ret));
     ret = casadi::run("no_such_program_harness.exe x", nullptr);
     int v = system("no_such_program_harness.exe x");
@@ -438,7 +455,7 @@ static void test_win_run() {
       env.block += L'\0';
     }
     env.block += L'\0';
-    int ret = casadi::win_run(qexe, &env);
+    int ret = casadi::win_run(exe, qexe, &env);
     Dump r = parse_dump(read_file(g_outfile), ret);
     check(ret==0 && r.env=="from block", "env block: ret=" + std::to_string(ret)
       + " env=" + esc(r.env));
@@ -449,7 +466,7 @@ static void test_win_run() {
     set_env("ADUMP_SPAM", "3000000");
     set_env("ADUMP_EXIT", "7");
     std::string out;
-    int ret = casadi::win_run(qexe + " cap", nullptr, &out);
+    int ret = casadi::win_run(exe, qexe + " cap", nullptr, &out);
     size_t nx = 0;
     for (char c : out) if (c=='x') nx++;
     check(ret==7 && nx==3000000, "capture: ret=" + std::to_string(ret) + " x count="
@@ -459,13 +476,49 @@ static void test_win_run() {
   }
   // Program in a directory with spaces and punctuation
   {
-    std::string d = join(g_work, "dir with space & (x) ^ y");
+    std::string d = join(g_work, "dir with space & (x) y");
     make_dir(d);
     std::string copy = join(d, "argv dump.exe");
     CopyFileA(exe.c_str(), copy.c_str(), FALSE);
     Dump r = dump_line(casadi::quote(copy) + " \"a b\"");
     check(r.ok && r.crt==std::vector<std::string>{"a b"}, "program path " + esc(copy)
       + " ret=" + std::to_string(r.ret) + " crt=" + vesc(r.crt));
+  }
+  // The application name is started, not the first word of the command line
+  {
+    set_env("ADUMP_OUT", g_outfile);
+    remove(g_outfile.c_str());
+    int ret = casadi::win_run(exe, "\"C:\\no such dir\\fake.exe\" x y", nullptr);
+    Dump r = parse_dump(read_file(g_outfile), ret);
+    check(ret==0 && r.ok && r.crt==std::vector<std::string>{"x", "y"}, "application name: ret="
+      + std::to_string(ret) + " crt=" + vesc(r.crt));
+  }
+  // Command interpreter, with and without ComSpec
+  {
+    const char* cs = getenv("ComSpec");
+    std::string comspec = cs ? cs : "";
+    char sys[MAX_PATH];
+    UINT n = GetSystemDirectoryA(sys, MAX_PATH);
+    std::string syscmd = std::string(sys, n) + "\\cmd.exe";
+    std::cout << "   ComSpec=" << comspec << " system cmd.exe=" << syscmd << std::endl;
+    check(cs && casadi::win_shell()==comspec, "win_shell() with ComSpec: " + esc(casadi::win_shell()));
+    // A cmd.exe in the current directory must not be taken
+    std::string fd = join(g_work, "fake cmd dir");
+    make_dir(fd);
+    CopyFileA(exe.c_str(), join(fd, "cmd.exe").c_str(), FALSE);
+    std::string cwd = current_dir();
+    change_dir(fd);
+    unset_env("ComSpec");
+    check(casadi::win_shell()==syscmd, "win_shell() without ComSpec: " + esc(casadi::win_shell()));
+    Dump r = dump_line(qexe + " nocomspec");
+    check(r.ret==0 && r.crt==std::vector<std::string>{"nocomspec"}, "run() without ComSpec: ret="
+      + std::to_string(r.ret) + " crt=" + vesc(r.crt));
+    set_env("ADUMP_EXIT", "5");
+    r = dump_line(qexe);
+    check(r.ret==5, "run() without ComSpec: exit code 5 gave " + std::to_string(r.ret));
+    unset_env("ADUMP_EXIT");
+    set_env("ComSpec", comspec);
+    change_dir(cwd);
   }
 }
 
@@ -586,7 +639,7 @@ static void test_vs_setup() {
   std::string full;
   bool on_path = find_full("cl.exe", nullptr, full);
   std::cout << "   cl.exe on PATH: " << (on_path ? full : "no") << std::endl;
-  std::string bat = Peek::vcvarsall();
+  std::string bat = vcvarsall();
   std::cout << "   vcvarsall: " << bat << std::endl;
   check(!bat.empty() && exists(bat), "vcvarsall.bat located");
   if (bat.empty()) return;
@@ -617,7 +670,7 @@ static void test_vs_setup() {
     check(casadi::win_env(bat, a)==env, a + ": cached");
   }
   // vcvarsall copied to a directory with cmd.exe syntax in its name
-  std::string d = join(g_work, "vs copy & (x) ^ y");
+  std::string d = join(g_work, "vs copy & (x) y");
   make_dir(d);
   std::string bat2 = join(d, "setup env.bat");
   write_file(bat2, "@call \"" + bat + "\" %*\r\n");
@@ -628,13 +681,34 @@ static void test_vs_setup() {
   } catch (std::exception& e) {
     fail("batch file in " + esc(d) + " threw: " + e.what());
   }
-  std::string d3 = join(g_work, "vs copy 100%");
-  make_dir(d3);
-  try {
-    const casadi::WinEnv* e3 = casadi::win_env(join(d3, "x.bat"), archs[0]);
-    check(e3==nullptr, "batch file in " + esc(d3) + ": expected no environment");
-  } catch (std::exception& e) {
-    fail("batch file in " + esc(d3) + " threw: " + e.what());
+  for (const char* n : {"vs copy 100%", "vs copy ^ x", "vs copy !x!"}) {
+    std::string d3 = join(g_work, n);
+    make_dir(d3);
+    write_file(join(d3, "x.bat"), "@call \"" + bat + "\" %*\r\n");
+    try {
+      const casadi::WinEnv* e3 = casadi::win_env(join(d3, "x.bat"), archs[0]);
+      check(e3==nullptr, "batch file in " + esc(d3) + ": expected no environment");
+    } catch (std::exception& e) {
+      fail("batch file in " + esc(d3) + " threw: " + e.what());
+    }
+  }
+  // Without ComSpec
+  {
+    const char* cs = getenv("ComSpec");
+    std::string comspec = cs ? cs : "";
+    std::string d4 = join(g_work, "vs copy nocomspec");
+    make_dir(d4);
+    std::string bat4 = join(d4, "setup env.bat");
+    write_file(bat4, "@call \"" + bat + "\" %*\r\n");
+    unset_env("ComSpec");
+    try {
+      const casadi::WinEnv* env = casadi::win_env(bat4, archs[0]);
+      std::string cl;
+      check(env && find_full("cl.exe", env, cl), "batch file without ComSpec: cl.exe resolved");
+    } catch (std::exception& e) {
+      fail(std::string("batch file without ComSpec threw: ") + e.what());
+    }
+    set_env("ComSpec", comspec);
   }
 }
 #endif
@@ -784,7 +858,7 @@ static void jit_dirs(const std::string& label, const std::string& sub, const Dic
     std::vector<std::string> s = sentinels(d);
     check(s.empty(), "dir=" + esc(n) + ": side effect " + vesc(s));
 #ifdef _WIN32
-    bool expect_refusal = n.find_first_of("%!\t")!=std::string::npos
+    bool expect_refusal = n.find_first_of("%!^\t")!=std::string::npos
       || (non_ascii(n) && !casadi::win_bytes_safe());
 #else
     bool expect_refusal = false;
@@ -881,7 +955,7 @@ static void test_jit_options() {
     run("compiler \" cl.exe\" (leading space)", o, w);
 
     std::string full;
-    std::string bat = Peek::vcvarsall();
+    std::string bat = vcvarsall();
     if (!bat.empty()) {
 #if defined(_M_ARM64) || defined(__aarch64__)
       std::string arch = "arm64";
@@ -944,6 +1018,17 @@ static void test_jit_options() {
   o["compiler"] = "no_such_compiler_harness";
   bool ok2 = jit_try(src, d + SEP, o, w, err);
   check(!ok2, "missing compiler fails: " + err);
+
+#ifdef _WIN32
+  // Without ComSpec
+  {
+    const char* cs = getenv("ComSpec");
+    std::string comspec = cs ? cs : "";
+    unset_env("ComSpec");
+    run("ComSpec unset", jit_base(), w);
+    set_env("ComSpec", comspec);
+  }
+#endif
 }
 
 
@@ -1012,7 +1097,7 @@ static void test_modes() {
         std::string what = std::string(shell ? "cmd.exe" : "direct") + " include_dirs " + esc(f)
           + " (" + esc(n) + ")";
 #ifdef _WIN32
-        if (inc.find_first_of("%!")!=std::string::npos
+        if (inc.find_first_of("%!^")!=std::string::npos
             || (non_ascii(inc) && !casadi::win_bytes_safe())) {
           refused(what, o, "Unsupported character");
           continue;
@@ -1021,6 +1106,14 @@ static void test_modes() {
         run(what, o, wi);
       }
     }
+  }
+
+  // Surrounding whitespace in include_dirs
+  for (const std::string& f : {" " + join(d, "inc space") + " \t\r\n", "\t" + join(d, "inc & (x)") + "\n"}) {
+    Dict o = jit_base();
+    o["flags"] = std::vector<std::string>{def_flag() + "USE_INC"};
+    o["include_dirs"] = std::vector<std::string>{f};
+    run("include_dirs " + esc(f), o, wi);
   }
 
 #ifdef _WIN32
@@ -1088,7 +1181,7 @@ static void test_modes() {
   make_dir(sd);
   std::string sb = join(sd, "setup.bat");
   if (g_jit=="cl") {
-    std::string bat = Peek::vcvarsall();
+    std::string bat = vcvarsall();
 #if defined(_M_ARM64) || defined(__aarch64__)
     std::string arch = "arm64";
 #elif defined(_WIN64)
@@ -1254,7 +1347,7 @@ static void test_cmd_details() {
     std::string wrap = join(root, "clwrap");
     make_dir(wrap);
     std::string marker = join(root, "cl_marker.txt");
-    std::string bat = Peek::vcvarsall();
+    std::string bat = vcvarsall();
     write_file(join(wrap, "cl.bat"), "@echo ran>>\"" + marker + "\"\r\n@call \"" + bat + "\" "
       + native_arch() + " >nul\r\n@cl.exe %*\r\n");
     write_file(join(wrap, "lk.bat"), "@call \"" + bat + "\" " + native_arch()
@@ -1278,10 +1371,10 @@ static void test_cmd_details() {
     std::string wrap = join(root, "argwrap");
     make_dir(wrap);
     std::string args = join(root, "args.txt");
-    std::string real = g_jit=="cl" ? "@call \"" + Peek::vcvarsall() + "\" " + native_arch()
+    std::string real = g_jit=="cl" ? "@call \"" + vcvarsall() + "\" " + native_arch()
       + " >nul\r\n@cl.exe %*\r\n" : "@gcc.exe %*\r\n";
     write_file(join(wrap, "argcc.bat"), "@echo %*>\"" + args + "\"\r\n@set SRC=%1\r\n" + real);
-    std::string link = g_jit=="cl" ? "@call \"" + Peek::vcvarsall() + "\" " + native_arch()
+    std::string link = g_jit=="cl" ? "@call \"" + vcvarsall() + "\" " + native_arch()
       + " >nul\r\n@link.exe %*\r\n" : "@gcc.exe %*\r\n";
     write_file(join(wrap, "argld.bat"), link);
     for (const char* n : {"plainpath", "with space", "amp&x"}) {
@@ -1360,13 +1453,83 @@ static void test_cmd_details() {
   // CMDCMDLINE in options
   {
     std::string d = in_dir("cmdline&md,sfxdirC&x");
+    set_env("HARNESS_CCL", "%CMDCMDLINE%");
+    set_env("HARNESS_DRV", "%=C:%");
     for (const char* f : {"-DX=%CMDCMDLINE%", "-DX=%cmdcmdline:~0,5%", "-DX=!CMDCMDLINE!",
-        "/I%=C:%inc", "-I%=c:%inc"}) {
+        "/I%=C:%inc", "-I%=c:%inc", "-I!=C:!inc", "-DX=%HARNESS_CCL%", "-I%HARNESS_DRV%inc"}) {
       Dict o = jit_base();
       o["flags"] = std::vector<std::string>{f};
       expect_refusal("flags [" + esc(f) + "]", d, o, "Unsupported variable");
     }
     change_dir(cwd);
+  }
+
+  // 6. Option checks
+  {
+    std::string d = in_dir("optchk&md,sfxdirC&x");
+    make_dir(join(d, "inc"));
+    write_file(join(join(d, "inc"), "harness_inc.h"), "#define INC_VALUE 1000\n");
+    for (const std::string& f : {def_flag() + "X=a\x01" "b", def_flag() + "X=a\nb", def_flag() + "X=a\rb",
+        def_flag() + "X=\x1b"}) {
+      Dict o = jit_base();
+      o["flags"] = std::vector<std::string>{f};
+      expect_refusal("flags [" + esc(f) + "]", d, o, "Unsupported character");
+    }
+    {
+      Dict o = jit_base();
+      o["compiler_output_flag"] = g_jit=="cl" ? "/Fo\x7f\x05" : "-o\x05";
+      expect_refusal("compiler_output_flag with a control character", d, o, "Unsupported character");
+    }
+    Want wt;
+    {
+      Dict o = jit_base();
+      o["flags"] = std::vector<std::string>{def_flag() + "A=1\t" + def_flag() + "TAG=tb"};
+      wt.tag = "tb";
+      expect_ok("flags with a tab", d, o, wt);
+    }
+    // Variables that merely start like CD
+    set_env("CDPATH", "cdp");
+    set_env("CD_X", "cdx");
+    set_env("__CD__X", "ucdx");
+    unset_env("CDE");
+    struct V { std::string f, tag; };
+    std::vector<V> vs = {
+      {"%CDPATH%", "cdp"}, {"%cdpath%", "cdp"}, {"%CD_X%", "cdx"}, {"%__CD__X%", "ucdx"},
+      {"%CDE%", "%CDE%"}, {"x%CD", "x%CD"},
+    };
+    for (const V& v : vs) {
+      Dict o = jit_base();
+      o["flags"] = std::vector<std::string>{def_flag() + "TAG=" + v.f};
+      wt.tag = v.tag.c_str();
+      expect_ok("cwd with & flags [" + esc(def_flag() + "TAG=" + v.f) + "]", d, o, wt);
+    }
+    {
+      Dict o = jit_base();
+      o["flags"] = std::vector<std::string>{def_flag() + "X=%=ExitCode%"};
+      expect_ok("cwd with & flags [" + esc(def_flag() + "X=%=ExitCode%") + "]", d, o, w);
+    }
+    // The current directory itself, also through a variable or in lower case
+    set_env("HARNESS_CDV", "%CD%");
+    for (const std::string& f : {inc_flag() + "%CD%\\inc", inc_flag() + "%__cd__%inc",
+        inc_flag() + "!cd!\\inc", inc_flag() + "!CD:~0!\\inc", inc_flag() + "%HARNESS_CDV%\\inc"}) {
+      Dict o = jit_base();
+      o["flags"] = std::vector<std::string>{def_flag() + "USE_INC", f};
+      expect_refusal("cwd with & flags [" + esc(f) + "]", d, o, "current directory");
+    }
+    change_dir(cwd);
+    // Control characters in the current directory
+    std::wstring wd = std::wstring(root.begin(), root.end()) + L"\\cc\x01x";
+    write_file(join(root, "jitsrc.c"), jit_source);
+    if (CreateDirectoryW(wd.c_str(), nullptr) && SetCurrentDirectoryW(wd.c_str())) {
+      Dict o = jit_base();
+      o["flags"] = std::vector<std::string>{inc_flag() + "%CD%"};
+      bool ok = jit_try(join(root, "jitsrc.c"), root + SEP, o, w, err);
+      check(!ok && err.find("current directory")!=std::string::npos, "cwd with \\x01: expected "
+        "'Unsupported character in the current directory', got " + (ok ? std::string("success") : err));
+      change_dir(cwd);
+    } else {
+      note("cannot create a directory with \\x01: error " + std::to_string(GetLastError()));
+    }
   }
 
   // 5. %CD% in options
@@ -1408,33 +1571,118 @@ static void test_cmd_details() {
   }
 }
 
-// Visual Studio setup that fails: JIT as without the setup
-static void test_vs_fail() {
-  section("Visual Studio setup failures (" + g_jit + ")");
-  std::string real = Peek::vcvarsall();
-  std::string d = join(g_work, "vsfail");
+// Child mode: JIT with whatever Visual Studio the plugin locates
+static int vsfail_child() {
+  std::string d = join(g_work, "jit");
   make_dir(d);
   std::string src = join(d, "jit src.c");
   write_file(src, jit_source);
-  struct B { std::string name, body; };
+  std::string err;
+  bool ok = jit_try(src, d + SEP, jit_base(), Want(), err);
+  std::cout << "vsfail_located " << casadi::win_vcvarsall() << std::endl;
+  std::cout << "vsfail_result " << (ok ? std::string("ok") : err.substr(0, 300)) << std::endl;
+  return 0;
+}
+
+// Child mode: stands in for vswhere.exe
+static int fake_vswhere(int argc, char** argv) {
+  const char* log = getenv("HARNESS_FAKE_VS_LOG");
+  if (log) {
+    std::ofstream f(log, std::ios::binary);
+    f << GetCommandLineA() << "\n";
+    for (int i=0; i<argc; ++i) f << "arg " << argv[i] << "\n";
+  }
+  const char* v = getenv("HARNESS_FAKE_VS");
+  if (v) std::cout << v << "\r\n" << "C:\\second\\line\r\n";
+  const char* ex = getenv("HARNESS_FAKE_VS_EXIT");
+  return ex ? atoi(ex) : 0;
+}
+
+// Visual Studio setup that fails: JIT as without the setup
+static void test_vs_fail() {
+  section("Visual Studio setup failures (" + g_jit + ")");
+  std::string real = vcvarsall();
+  std::string real_install = real.substr(0, real.size() - std::string("\\VC\\Auxiliary\\Build\\vcvarsall.bat").size());
+  std::cout << "   real installation: " << real_install << std::endl;
+  char self[MAX_PATH];
+  GetModuleFileNameA(nullptr, self, MAX_PATH);
+  const char* pf86 = getenv("ProgramFiles(x86)");
+  std::string old_pf86 = pf86 ? pf86 : "";
+  struct B { std::string name, body; bool vswhere; const char* exit; bool ok; };
   std::vector<B> bs = {
-    {"exit1.bat", "@exit /b 1\r\n"},
-    {"nocl.bat", "@set HARNESS_FROM_BAT=1\r\n"},
-    {"bogus.bat", "@call \"" + real + "\" bogus_arch\r\n"},
-    {"empty.bat", ""},
+    {"exit1", "@exit /b 1\r\n", true, nullptr, false},
+    {"nocl", "@set HARNESS_FROM_BAT=1\r\n", true, nullptr, false},
+    {"bogus", "@call \"" + real + "\" bogus_arch\r\n", true, nullptr, false},
+    {"empty", "", true, nullptr, false},
+    {"novswhere", "", false, nullptr, false},
+    {"vswhere_exit1", "", true, "1", false},
+    {"real", "", true, nullptr, true},
   };
   for (const B& b : bs) {
-    std::string bat = join(d, b.name);
-    write_file(bat, b.body);
-    Peek::vcvarsall_ = bat;
-    Peek::vcvarsall_searched_ = true;
-    std::string err;
-    bool ok = jit_try(src, d + SEP, jit_base(), Want(), err);
-    check(!ok && err.find("Environment setup failed")==std::string::npos
-      && err.find("Compilation failed")!=std::string::npos,
-      "vcvarsall " + b.name + ": expected 'Compilation failed', got " + (ok ? "success" : err.substr(0, 250)));
+    std::string w = join(g_work, "vsfail " + b.name);
+    std::string pf = join(w, "pf & (x)");
+    std::string inst = join(w, "vs install");
+    std::string installer = join(join(pf, "Microsoft Visual Studio"), "Installer");
+    make_dirs(installer);
+    std::string build = join(inst, "VC\\Auxiliary\\Build");
+    make_dirs(build);
+    write_file(join(build, "vcvarsall.bat"), b.body);
+    std::string vswhere = join(installer, "vswhere.exe");
+    if (b.vswhere) CopyFileA(self, vswhere.c_str(), FALSE);
+    std::string log = join(w, "vswhere log.txt");
+    remove(log.c_str());
+    set_env("ProgramFiles(x86)", pf);
+    set_env("HARNESS_FAKE_VS", b.name=="real" ? real_install : inst);
+    set_env("HARNESS_FAKE_VS_LOG", log);
+    if (b.exit) set_env("HARNESS_FAKE_VS_EXIT", b.exit); else unset_env("HARNESS_FAKE_VS_EXIT");
+    std::string out = join(w, "child out.txt");
+    SECURITY_ATTRIBUTES sa = {sizeof(SECURITY_ATTRIBUTES), nullptr, TRUE};
+    HANDLE f = CreateFileA(out.c_str(), GENERIC_WRITE, FILE_SHARE_READ, &sa, CREATE_ALWAYS,
+      FILE_ATTRIBUTE_NORMAL, nullptr);
+    std::string cmd = aquote(self) + " --work " + aquote(w) + " --jit " + g_jit + " --vsfail-child x";
+    std::vector<char> buf(cmd.begin(), cmd.end());
+    buf.push_back('\0');
+    STARTUPINFOA si;
+    ZeroMemory(&si, sizeof(si));
+    si.cb = sizeof(si);
+    si.dwFlags = STARTF_USESTDHANDLES;
+    si.hStdInput = GetStdHandle(STD_INPUT_HANDLE);
+    si.hStdOutput = f;
+    si.hStdError = f;
+    PROCESS_INFORMATION pi;
+    BOOL started = CreateProcessA(nullptr, buf.data(), nullptr, nullptr, TRUE, 0, nullptr, nullptr,
+      &si, &pi);
+    if (started) {
+      WaitForSingleObject(pi.hProcess, 300000);
+      CloseHandle(pi.hProcess);
+      CloseHandle(pi.hThread);
+    }
+    CloseHandle(f);
+    set_env("ProgramFiles(x86)", old_pf86);
+    unset_env("HARNESS_FAKE_VS");
+    unset_env("HARNESS_FAKE_VS_LOG");
+    unset_env("HARNESS_FAKE_VS_EXIT");
+    check(started, b.name + ": start child");
+    if (!started) continue;
+    std::string res = read_file(out);
+    size_t p = res.find("vsfail_located");
+    std::cout << "   " << b.name << ": " << res.substr(p==std::string::npos ? 0 : p, 600);
+    std::string vlog = read_file(log);
+    if (b.vswhere) {
+      // Started by its full path, with argv[0] that path
+      check(vlog.find("arg " + vswhere + "\n")!=std::string::npos
+        && vlog.find("installationPath")!=std::string::npos,
+        b.name + ": vswhere invocation " + esc(vlog, 400));
+    }
+    if (b.ok) {
+      check(res.find("vsfail_result ok")!=std::string::npos, b.name + ": expected success");
+    } else {
+      check(res.find("vsfail_result ")!=std::string::npos
+        && res.find("Environment setup failed")==std::string::npos
+        && res.find("Compilation failed")!=std::string::npos,
+        b.name + ": expected 'Compilation failed'");
+    }
   }
-  Peek::vcvarsall_ = real;
 }
 
 static void test_vs_time() {
@@ -1452,7 +1700,7 @@ static void test_vs_time() {
     check(ok, "timed JIT: " + err);
   }
   DWORD t0 = GetTickCount();
-  casadi::win_env(Peek::vcvarsall(), "x64_x86");
+  casadi::win_env(vcvarsall(), "x64_x86");
   std::cout << "   win_env x64_x86 alone: " << (GetTickCount()-t0) << " ms" << std::endl;
 }
 #endif
@@ -1534,7 +1782,7 @@ static void test_bat_wrapper() {
 #endif
   std::string cc_body, ld_body;
   if (g_jit=="cl") {
-    std::string bat = Peek::vcvarsall();
+    std::string bat = vcvarsall();
     cc_body = "@call \"" + bat + "\" " + arch + " >nul\r\n@cl %*\r\n";
     ld_body = "@call \"" + bat + "\" " + arch + " >nul\r\n@link %*\r\n";
   } else {
@@ -1590,7 +1838,7 @@ static void test_bat_wrapper() {
       }
       std::string what = v.label + " (" + esc(v.cc) + "), dir=" + esc(n);
       check(s.empty(), what + ": side effect " + vesc(s));
-      if (std::string(n).find_first_of("%!")!=std::string::npos) {
+      if (std::string(n).find_first_of("%!^")!=std::string::npos) {
         check(!ok && err.find("Unsupported character")!=std::string::npos,
           what + ": expected 'Unsupported character', got " + (ok ? std::string("success") : err));
       } else {
@@ -1600,6 +1848,50 @@ static void test_bat_wrapper() {
     }
   }
   set_env("PATH", old_path);
+}
+#endif
+
+#if defined(_WIN32) && defined(CASADI_WITH_THREAD)
+// Captured output while other threads start long-lived processes
+static void test_capture_threads() {
+  section("win_run capture while other threads start processes");
+  if (g_dumps.empty()) return;
+  const std::string& exe = g_dumps[0].path;
+  std::string qexe = casadi::quote(exe);
+  unset_env("ADUMP_OUT");
+  set_env("ADUMP_SPAM", "100000");
+  std::atomic<bool> stop(false);
+  std::atomic<int> spawned(0);
+  std::vector<std::thread> th;
+  for (int i=0; i<3; ++i) {
+    th.emplace_back([&]() {
+      // Each child outlives the captures below
+      for (int k=0; k<25 && !stop; ++k) {
+        casadi::run("start \"\" /b ping -n 21 127.0.0.1 >nul", nullptr);
+        spawned++;
+      }
+    });
+  }
+  Sleep(300);
+  DWORD worst = 0;
+  int bad = 0;
+  for (int k=0; k<25; ++k) {
+    std::string out;
+    DWORD t0 = GetTickCount();
+    int ret = casadi::win_run(exe, qexe + " cap", nullptr, &out);
+    DWORD dt = GetTickCount() - t0;
+    if (dt>worst) worst = dt;
+    size_t nx = 0;
+    for (char c : out) if (c=='x') nx++;
+    if (ret!=0 || nx!=100000 || out.find("a 636170")==std::string::npos) bad++;
+  }
+  stop = true;
+  for (auto& t : th) t.join();
+  unset_env("ADUMP_SPAM");
+  std::cout << "   " << spawned << " background processes, slowest capture " << worst << " ms"
+    << std::endl;
+  check(bad==0, std::to_string(bad) + " captures with wrong output");
+  check(worst<5000, "slowest capture took " + std::to_string(worst) + " ms");
 }
 #endif
 
@@ -1621,8 +1913,27 @@ static void test_jit_threads() {
       errs[i] = err;
     });
   }
+#ifdef _WIN32
+  // A Visual Studio environment captured meanwhile
+  std::string env_err = "not run";
+  if (g_jit=="cl" && !vcvarsall().empty()) {
+    std::string d = join(g_work, "thread env & x");
+    make_dir(d);
+    std::string bat = join(d, "setup env.bat");
+    write_file(bat, "@call \"" + vcvarsall() + "\" %*\r\n");
+    th.emplace_back([=, &env_err]() {
+      const casadi::WinEnv* env = casadi::win_env(bat, native_arch());
+      std::string cl;
+      env_err = env && find_full("cl.exe", env, cl) ? "" : "cl.exe not resolved";
+    });
+  }
+#endif
   for (auto& t : th) t.join();
   for (int i=0; i<n; ++i) check(oks[i], "thread " + std::to_string(i) + ": " + errs[i]);
+#ifdef _WIN32
+  if (g_jit=="cl" && !vcvarsall().empty()) check(env_err.empty(), "environment capture: " + env_err);
+  test_capture_threads();
+#endif
 #else
   note("built without CASADI_WITH_THREAD");
 #endif
@@ -1632,6 +1943,9 @@ static void test_jit_threads() {
 int main(int argc, char** argv) {
   std::vector<std::string> only;
   std::string probe;
+#ifdef _WIN32
+  if (argc>1 && std::string(argv[1])=="-latest") return fake_vswhere(argc, argv);
+#endif
   for (int i=1; i<argc; ++i) {
     std::string a = argv[i];
     if (a=="--work" && i+1<argc) {
@@ -1644,6 +1958,9 @@ int main(int argc, char** argv) {
       g_jit = argv[++i];
     } else if (a=="--only" && i+1<argc) {
       only.push_back(argv[++i]);
+    } else if (a=="--vsfail-child" && i+1<argc) {
+      ++i;
+      probe = "\x03";
     } else if (a=="--console-probe2" && i+1<argc) {
       ++i;
       probe = "\x02";
@@ -1659,6 +1976,7 @@ int main(int argc, char** argv) {
   g_outfile = join(g_work, probe.empty() ? "adump.txt" : "adump_probe.txt");
 #ifdef _WIN32
   if (probe=="\x02") return console_probe2();
+  if (probe=="\x03") return vsfail_child();
   if (!probe.empty()) return console_probe(probe);
 #endif
   auto want = [&](const std::string& s) {
@@ -1689,6 +2007,7 @@ int main(int argc, char** argv) {
       {"${HARNESS_V}x", "hello worldx"}, {"$HARNESS_Vx", ""}, {"$HARNESS_UNDEF", ""},
       {"a$", "a$"}, {"${HARNESS_V", "${HARNESS_V"}, {"$(x)", "$(x)"}, {"`x`", "`x`"},
       {"$1", ""}, {"'", "'"}, {"\"", "\""}, {"\"'a'\"", "'a'"},
+      {" /a b ", "/a b"}, {"\t'/a b'\r\n", "/a b"}, {" \t\n", ""}, {"' a '", " a "},
     };
     for (const I& c : is) {
       std::string got = casadi::include_dir(c.in);

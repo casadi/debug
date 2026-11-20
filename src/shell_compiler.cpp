@@ -36,7 +36,6 @@
 
 #include <cstdlib>
 #include <cstring>
-#include <cctype>
 
 #ifdef _WIN32
 #include <windows.h>
@@ -87,16 +86,14 @@ namespace {
     }
 
     // Run a command line, optionally capturing stdout; -1 if it could not be started
-    int win_run(const std::string& cmd, const WinEnv* env, std::string* out=nullptr,
-        const char* dir=nullptr) {
-      SECURITY_ATTRIBUTES sa = {sizeof(SECURITY_ATTRIBUTES), nullptr, TRUE};
+    int win_run(const std::string& app, const std::string& cmd, const WinEnv* env,
+        std::string* out=nullptr, const char* dir=nullptr) {
       HANDLE rd = nullptr, wr = nullptr;
       STARTUPINFOA si;
       ZeroMemory(&si, sizeof(si));
       si.cb = sizeof(si);
       if (out) {
-        if (!CreatePipe(&rd, &wr, &sa, 0)) return -1;
-        SetHandleInformation(rd, HANDLE_FLAG_INHERIT, 0);
+        if (!CreatePipe(&rd, &wr, nullptr, 0)) return -1;
         si.dwFlags = STARTF_USESTDHANDLES;
         si.hStdInput = GetStdHandle(STD_INPUT_HANDLE);
         si.hStdOutput = wr;
@@ -109,9 +106,18 @@ namespace {
       buf.push_back('\0');
       std::wstring block = env ? win_block(env->block) : L"";
       PROCESS_INFORMATION pi;
-      BOOL ok = CreateProcessA(nullptr, buf.data(), nullptr, nullptr, TRUE, flags,
-        env ? const_cast<wchar_t*>(block.data()) : nullptr, dir, &si, &pi);
-      if (wr) CloseHandle(wr);
+      BOOL ok;
+      {
+#ifdef CASADI_WITH_THREAD
+        // Only this child inherits the pipe
+        static std::mutex mtx;
+        std::lock_guard<std::mutex> lock(mtx);
+#endif // CASADI_WITH_THREAD
+        if (wr) SetHandleInformation(wr, HANDLE_FLAG_INHERIT, HANDLE_FLAG_INHERIT);
+        ok = CreateProcessA(app.c_str(), buf.data(), nullptr, nullptr, TRUE, flags,
+          env ? const_cast<wchar_t*>(block.data()) : nullptr, dir, &si, &pi);
+        if (wr) CloseHandle(wr);
+      }
       if (!ok) {
         if (rd) CloseHandle(rd);
         return -1;
@@ -128,6 +134,15 @@ namespace {
       CloseHandle(pi.hProcess);
       CloseHandle(pi.hThread);
       return static_cast<int>(ret);
+    }
+
+    // Command interpreter of system()
+    std::string win_shell() {
+      const char* comspec = getenv("ComSpec");
+      if (comspec) return comspec;
+      char dir[MAX_PATH];
+      UINT n = GetSystemDirectoryA(dir, MAX_PATH);
+      return std::string(dir, n<MAX_PATH ? n : 0) + "\\cmd.exe";
     }
 
     // Text as cmd.exe sees it: decoded as by CreateProcessA, optionally with %VAR% expanded
@@ -172,9 +187,7 @@ namespace {
 
     // Do non-ASCII bytes reach a narrow program unchanged, without best fit or trail bytes?
     bool win_bytes_safe() {
-      CPINFO cp;
-      if (GetACP()!=CP_UTF8) return GetCPInfo(CP_ACP, &cp) && cp.MaxCharSize==1;
-      // UTF-8 for this process; the program uses the code page of the system
+      // The program uses the code page of the system, which may differ from this process
       char acp[16] = "";
       DWORD size = sizeof(acp);
       HKEY key;
@@ -183,7 +196,11 @@ namespace {
       LONG ret = RegQueryValueExA(key, "ACP", nullptr, nullptr,
         reinterpret_cast<BYTE*>(acp), &size);
       RegCloseKey(key);
-      return ret==ERROR_SUCCESS && size<sizeof(acp) && std::string(acp)=="65001";
+      if (ret!=ERROR_SUCCESS || size>=sizeof(acp)) return false;
+      if (GetACP()==CP_UTF8) return std::string(acp)=="65001";
+      CPINFO cp;
+      return std::string(acp)==std::to_string(GetACP()) && GetCPInfo(CP_ACP, &cp)
+        && cp.MaxCharSize==1;
     }
 #endif // _WIN32
 
@@ -192,9 +209,9 @@ namespace {
       // Not to be taken for an option
       if (!s.empty() && (s[0]=='-' || s[0]=='@')) return quote("./" + s);
 #ifdef _WIN32
-      // cmd.exe expands % and ! also within quotes
+      // cmd.exe expands % and !, and with delayed expansion removes ^, also within quotes
       for (char c : s) {
-        casadi_assert(c!='%' && c!='!' && c!='"' && static_cast<unsigned char>(c)>=0x20,
+        casadi_assert(c!='%' && c!='!' && c!='^' && c!='"' && static_cast<unsigned char>(c)>=0x20,
           "Unsupported character in '" + s + "'");
       }
       // Non-ASCII could reach the program as " or \, by best fit or as a trail byte
@@ -226,7 +243,11 @@ namespace {
     }
 
     // Include directory, with enclosing quotes removed as by the shell
-    std::string include_dir(const std::string& s) {
+    std::string include_dir(const std::string& entry) {
+      // Without surrounding whitespace, which separated it for the shell
+      const char* ws = " \t\r\n";
+      size_t first = entry.find_first_not_of(ws), last = entry.find_last_not_of(ws);
+      std::string s = first==std::string::npos ? "" : entry.substr(first, last-first+1);
 #ifdef _WIN32
       std::string e;
       if (!win_narrow(win_wide(s, true), e)) e = s;
@@ -242,11 +263,13 @@ namespace {
         if (e[i]=='$') {
           bool brace = i+1<e.size() && e[i+1]=='{';
           size_t j = brace ? i+2 : i+1, k = j;
-          while (k<e.size() && (isalnum(static_cast<unsigned char>(e[k])) || e[k]=='_')) k++;
+          while (k<e.size() && (e[k]=='_' || (e[k]>='0' && e[k]<='9')
+              || (e[k]>='A' && e[k]<='Z') || (e[k]>='a' && e[k]<='z'))) k++;
           if (k>j && (!brace || (k<e.size() && e[k]=='}'))) {
             std::string name = e.substr(j, k-j);
             char buf[4096];
-            const char* v = name=="PWD" ? getcwd(buf, sizeof(buf)) : getenv(name.c_str());
+            const char* v = name=="PWD" ? getcwd(buf, sizeof(buf)) : nullptr;
+            if (!v) v = getenv(name.c_str());
             if (v) r += v;
             i = brace ? k : k-1;
             continue;
@@ -303,12 +326,12 @@ namespace {
         } catch (std::exception&) {
           return nullptr;
         }
-        const char* comspec = getenv("ComSpec");
-        std::string cmd = "\"" + std::string(comspec ? comspec : "cmd.exe")
+        std::string shell = win_shell();
+        std::string cmd = "\"" + shell
           + "\" /u /d /s /c \"set VSCMD_SKIP_SENDTELEMETRY=1&& " + qbat + " " + args
           + " >nul && set\"";
         std::string dir = bat.substr(0, bat.find_last_of('\\')), out;
-        if (win_run(cmd, nullptr, &out, dir.c_str())) out.clear();
+        if (win_run(shell, cmd, nullptr, &out, dir.c_str())) out.clear();
         // Output is UTF-16, one NAME=value per line
         std::wstring wout(reinterpret_cast<const wchar_t*>(out.data()),
           out.size()/sizeof(wchar_t));
@@ -349,8 +372,8 @@ namespace {
 #else
       std::string component = "Microsoft.VisualStudio.Component.VC.Tools.x86.x64";
 #endif
-      std::string out;
-      if (win_run("\"" + dir + "\\vswhere.exe\" -latest -products * -requires " + component
+      std::string out, vswhere = dir + "\\vswhere.exe";
+      if (win_run(vswhere, "\"" + vswhere + "\" -latest -products * -requires " + component
           + " -property installationPath", nullptr, &out, dir.c_str())) return "";
       size_t end = out.find_first_of("\r\n");
       if (end!=std::string::npos) out.resize(end);
@@ -363,9 +386,8 @@ namespace {
 #ifdef _WIN32
     int run(const std::string& cmd, const WinEnv* env) {
       // As system(), without a console window
-      const char* comspec = getenv("ComSpec");
-      std::string shell = comspec ? comspec : "cmd.exe";
-      return win_run("\"" + shell + "\" /s /c \"" + cmd + "\"", env);
+      std::string shell = win_shell();
+      return win_run(shell, "\"" + shell + "\" /s /c \"" + cmd + "\"", env);
 #else // _WIN32
     int run(const std::string& cmd) {
       return system(cmd.c_str());
@@ -388,25 +410,6 @@ namespace {
   void CASADI_IMPORTER_SHELL_EXPORT casadi_load_importer_shell() {
     ImporterInternal::registerPlugin(casadi_register_importer_shell);
   }
-
-#ifdef _WIN32
-  std::string ShellCompiler::vcvarsall_;
-  bool ShellCompiler::vcvarsall_searched_ = false;
-#ifdef CASADI_WITH_THREAD
-  std::mutex ShellCompiler::mutex_vcvarsall_;
-#endif // CASADI_WITH_THREAD
-
-  std::string ShellCompiler::vcvarsall() {
-#ifdef CASADI_WITH_THREAD
-    std::lock_guard<std::mutex> lock(mutex_vcvarsall_);
-#endif // CASADI_WITH_THREAD
-    if (!vcvarsall_searched_) {
-      vcvarsall_ = win_vcvarsall();
-      vcvarsall_searched_ = true;
-    }
-    return vcvarsall_;
-  }
-#endif // _WIN32
 
   ShellCompiler::ShellCompiler(const std::string& name) :
     ImporterInternal(name) {
@@ -581,24 +584,41 @@ namespace {
     all.insert(all.end(), compiler_flags.begin(), compiler_flags.end());
     all.insert(all.end(), linker_flags.begin(), linker_flags.end());
     for (const std::string& s : all) {
+      for (char c : s) {
+        casadi_assert(c=='\t' || static_cast<unsigned char>(c)>=0x20,
+          "Unsupported character in '" + s + "'");
+      }
       // CasADi's paths must not end up between quotes
       casadi_assert(cmd_balanced(win_wide(s, false)) && cmd_balanced(win_wide(s, true)),
         "Unbalanced quotes or trailing ^ in '" + s + "'");
       // Nor the command line or current directory, which cmd.exe would expand unquoted
-      std::string u = s;
-      for (char& c : u) c = static_cast<char>(toupper(static_cast<unsigned char>(c)));
-      casadi_assert(u.find("CMDCMDLINE")==std::string::npos && u.find("%=")==std::string::npos,
+      std::string u = s, x;
+      if (win_narrow(win_wide(s, true), x)) u += "\n" + x;
+      for (char& c : u) if (c>='a' && c<='z') c = static_cast<char>(c-'a'+'A');
+      bool drive = false, cd = false;
+      for (size_t i=u.find_first_of("%!"); i!=std::string::npos; i=u.find_first_of("%!", i+1)) {
+        if (i+3<u.size() && u[i+1]=='=' && u[i+2]>='A' && u[i+2]<='Z' && u[i+3]==':') {
+          drive = true;
+        }
+      }
+      casadi_assert(u.find("CMDCMDLINE")==std::string::npos && !drive,
         "Unsupported variable in '" + s + "'");
-      if (u.find("%CD")!=std::string::npos || u.find("%__CD__")!=std::string::npos
-          || u.find("!CD")!=std::string::npos) {
+      for (const char* v : {"%CD%", "%CD:", "!CD!", "!CD:",
+          "%__CD__%", "%__CD__:", "!__CD__!", "!__CD__:"}) {
+        if (u.find(v)!=std::string::npos) cd = true;
+      }
+      if (cd) {
         std::vector<wchar_t> buf(GetCurrentDirectoryW(0, nullptr) + 1);
         DWORD n = GetCurrentDirectoryW(static_cast<DWORD>(buf.size()), buf.data());
         std::wstring cwd(buf.data(), n<buf.size() ? n : 0);
         // Like CasADi's paths, unchanged for the program: no best fit, no trail bytes
         std::string a;
-        bool ascii = true;
-        for (wchar_t c : cwd) if (c>=0x80) ascii = false;
-        casadi_assert(!cwd.empty() && cwd.find_first_of(L"&|<>^()%!\"")==std::wstring::npos
+        bool ascii = true, ok = !cwd.empty();
+        for (wchar_t c : cwd) {
+          if (c>=0x80) ascii = false;
+          if (c<0x20) ok = false;
+        }
+        casadi_assert(ok && cwd.find_first_of(L"&|<>^()%!\"")==std::wstring::npos
           && (ascii || (win_narrow(cwd, a) && win_bytes_safe())),
           "Unsupported character in the current directory for '" + s + "'");
       }
@@ -611,19 +631,25 @@ namespace {
     if (_stricmp(prog.c_str(), "cl")==0 || _stricmp(prog.c_str(), "cl.exe")==0) {
       bool found = false;
       for (const std::string& e : win_pathext()) {
-        if (win_find(prog, nullptr, e)) found = true;
+        if (win_find(prog, nullptr, e)) {
+          found = true;
+          break;
+        }
       }
-      std::string bat = found ? "" : vcvarsall();
-      if (!bat.empty()) {
+      if (!found) {
+        // Located once per process
+        static const std::string bat = win_vcvarsall();
+        if (!bat.empty()) {
 #if defined(_M_ARM64) || defined(__aarch64__)
-        env = win_env(bat, "arm64");
+          env = win_env(bat, "arm64");
 #elif defined(_WIN64)
-        env = win_env(bat, "x64");
+          env = win_env(bat, "x64");
 #else
-        env = win_env(bat, "x86");
+          env = win_env(bat, "x86");
 #endif
-        // Otherwise as before
-        if (env && !win_find(prog, env, ".exe")) env = nullptr;
+          // Otherwise as before
+          if (env && !win_find(prog, env, ".exe")) env = nullptr;
+        }
       }
     }
 #endif // _WIN32
