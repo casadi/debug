@@ -5,7 +5,7 @@ from macho import machos
 root = sys.argv[1]
 fake = "/Users/runner/work/casadi/casadi/install/casadi/"
 names = set(os.listdir(root))
-n_changed = 0
+stats = {"full": 0, "partial": 0, "untouched": 0}
 for p in machos(root):
     out = subprocess.check_output(["otool", "-l", p], text=True).splitlines()
     rpaths, deps = [], []
@@ -20,9 +20,15 @@ for p in machos(root):
         b = dep.split("/")[-1]
         if dep.startswith("@rpath/") and b in names:
             args += ["-change", dep, fake + b]
-    args += ["-add_rpath", "/Users/runner/work/casadi/casadi/build/lib"]
+    extra = ["-add_rpath", "/Users/runner/work/casadi/casadi/build/lib"]
     if "@loader_path" in rpaths:
-        args += ["-add_rpath", "@loader_path/"]
-    subprocess.check_call(["install_name_tool"] + args + [p], stderr=subprocess.DEVNULL)
-    n_changed += 1
-print("perturbed", n_changed, "files")
+        extra += ["-add_rpath", "@loader_path/"]
+    # Fall back to fewer edits when the header padding is too small
+    for attempt in (args + extra, args, extra):
+        if attempt and subprocess.run(["install_name_tool"] + attempt + [p],
+                                      capture_output=True).returncode == 0:
+            stats[len(attempt) == len(args + extra) and "full" or "partial"] += 1
+            break
+    else:
+        stats["untouched"] += 1
+print("perturbed", stats)

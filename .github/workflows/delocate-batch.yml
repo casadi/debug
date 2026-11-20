@@ -13,29 +13,29 @@ jobs:
     steps:
       - name: install_name_tool semantics
         run: |
-          set -x
+          set +e
           cd "$RUNNER_TEMP"
           echo 'int f(void){return 1;}' > a.c
           echo 'int g(void){return 2;}' > b.c
           clang -dynamiclib b.c -o libb.dylib -install_name /Users/runner/fake/libb.dylib
-          clang -dynamiclib a.c libb.dylib -o liba.dylib -Wl,-headerpad_max_install_names \
-            -Wl,-rpath,/Users/runner/x -Wl,-rpath,/Users/runner/x -Wl,-rpath,@loader_path -Wl,-rpath,@loader_path || true
-          otool -l liba.dylib | grep -A2 LC_RPATH | grep path
-          # can install_name_tool create a duplicate?
-          cp liba.dylib d.dylib; install_name_tool -add_rpath @loader_path d.dylib; echo "add dup rc=$?"
-          # repeated -delete_rpath in one call
-          cp liba.dylib t1.dylib
-          install_name_tool -delete_rpath /Users/runner/x -delete_rpath /Users/runner/x t1.dylib; echo "double delete rc=$?"
-          otool -l t1.dylib | grep -A2 LC_RPATH | grep path || true
-          # single delete of a duplicated path: which copy goes?
-          cp liba.dylib t2.dylib
-          install_name_tool -delete_rpath /Users/runner/x t2.dylib; echo "single delete rc=$?"
-          otool -l t2.dylib | grep -A2 LC_RPATH | grep path || true
-          # combined delete/add/change in one call, as update_load_commands does
-          cp liba.dylib t3.dylib
-          install_name_tool -delete_rpath /Users/runner/x -delete_rpath @loader_path -add_rpath @executable_path \
-            -change /Users/runner/fake/libb.dylib @rpath/libb.dylib t3.dylib; echo "combined rc=$?"
-          otool -l t3.dylib | grep -A2 -E "LC_RPATH|LC_LOAD_DYLIB" | grep -E "path|name"
+          clang -dynamiclib a.c libb.dylib -o base.dylib -Wl,-headerpad_max_install_names \
+            -Wl,-rpath,/Users/runner/x -Wl,-rpath,/Users/runner/y -Wl,-rpath,@loader_path
+          # ld and install_name_tool refuse exact duplicates: forge one (same length) and re-sign
+          python3 -c "import sys; d=open('base.dylib','rb').read(); open('liba.dylib','wb').write(d.replace(b'/Users/runner/y', b'/Users/runner/x'))"
+          codesign -f -s - liba.dylib
+          echo "== forged input"; otool -l liba.dylib | grep -A2 LC_RPATH | grep path
+          echo "== add duplicate"; cp liba.dylib d.dylib; install_name_tool -add_rpath @loader_path d.dylib; echo "rc=$?"
+          echo "== repeated -delete_rpath in one call"; cp liba.dylib t1.dylib
+          install_name_tool -delete_rpath /Users/runner/x -delete_rpath /Users/runner/x t1.dylib; echo "rc=$?"
+          otool -l t1.dylib | grep -A2 LC_RPATH | grep path
+          echo "== one -delete_rpath of a duplicated path"; cp liba.dylib t2.dylib
+          install_name_tool -delete_rpath /Users/runner/x t2.dylib; echo "rc=$?"
+          otool -l t2.dylib | grep -A2 LC_RPATH | grep path
+          echo "== update_load_commands-style: batched delete+add+change, then extra delete per copy"; cp liba.dylib t3.dylib
+          install_name_tool -delete_rpath /Users/runner/x -add_rpath @executable_path \
+            -change /Users/runner/fake/libb.dylib @rpath/libb.dylib t3.dylib; echo "rc=$?"
+          install_name_tool -delete_rpath /Users/runner/x t3.dylib; echo "rc=$?"
+          otool -l t3.dylib | grep -A2 -E "LC_RPATH|LC_LOAD_DYLIB" | grep -E " path | name "
           codesign -v t3.dylib && echo "t3 signature valid"
 
   ab:
