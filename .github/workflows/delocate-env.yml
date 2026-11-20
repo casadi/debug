@@ -1,6 +1,6 @@
 name: delocate CI-env slowness (DYLD_LIBRARY_PATH / SDKROOT)
 
-on: [push, workflow_dispatch]
+on: [workflow_dispatch]
 
 env:
   OLD: e821156cca18e784e5d23b6e962184e7feda9e0b
