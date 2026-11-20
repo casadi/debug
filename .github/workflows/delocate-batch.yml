@@ -1,0 +1,110 @@
+name: delocate batch install names A/B
+
+on: [push, workflow_dispatch]
+
+env:
+  OLD: e821156cca18e784e5d23b6e962184e7feda9e0b
+  NEW: batch-install-names
+  SKIP: libknitro:libhsl:libworhp:libsnopt7:libut:libmex:libmx:libeng:libmadnlp_c:libMad:libmosek64:libxprs:libonnxruntime:libipmc:libconopt:libconopt.so.4:libonnxruntime.so.1
+
+jobs:
+  semantics:
+    runs-on: macos-15
+    steps:
+      - name: install_name_tool semantics
+        run: |
+          set -x
+          cd "$RUNNER_TEMP"
+          echo 'int f(void){return 1;}' > a.c
+          echo 'int g(void){return 2;}' > b.c
+          clang -dynamiclib b.c -o libb.dylib -install_name /Users/runner/fake/libb.dylib
+          clang -dynamiclib a.c libb.dylib -o liba.dylib -Wl,-headerpad_max_install_names \
+            -Wl,-rpath,/Users/runner/x -Wl,-rpath,/Users/runner/x -Wl,-rpath,@loader_path -Wl,-rpath,@loader_path || true
+          otool -l liba.dylib | grep -A2 LC_RPATH | grep path
+          # can install_name_tool create a duplicate?
+          cp liba.dylib d.dylib; install_name_tool -add_rpath @loader_path d.dylib; echo "add dup rc=$?"
+          # repeated -delete_rpath in one call
+          cp liba.dylib t1.dylib
+          install_name_tool -delete_rpath /Users/runner/x -delete_rpath /Users/runner/x t1.dylib; echo "double delete rc=$?"
+          otool -l t1.dylib | grep -A2 LC_RPATH | grep path || true
+          # single delete of a duplicated path: which copy goes?
+          cp liba.dylib t2.dylib
+          install_name_tool -delete_rpath /Users/runner/x t2.dylib; echo "single delete rc=$?"
+          otool -l t2.dylib | grep -A2 LC_RPATH | grep path || true
+          # combined delete/add/change in one call, as update_load_commands does
+          cp liba.dylib t3.dylib
+          install_name_tool -delete_rpath /Users/runner/x -delete_rpath @loader_path -add_rpath @executable_path \
+            -change /Users/runner/fake/libb.dylib @rpath/libb.dylib t3.dylib; echo "combined rc=$?"
+          otool -l t3.dylib | grep -A2 -E "LC_RPATH|LC_LOAD_DYLIB" | grep -E "path|name"
+          codesign -v t3.dylib && echo "t3 signature valid"
+
+  ab:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4.1.1
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.9"
+      - name: Inputs
+        run: |
+          curl -fsSLO https://github.com/casadi/casadi/releases/download/nightly-main/casadi-main-osx-arm64-octave7.3.0.zip
+          curl -fsSLO https://github.com/casadi/mockups/releases/download/v116/mockups_macos-15_arm64_Release.zip
+          unzip -q mockups_macos-15_arm64_Release.zip -d mockups
+          mkdir tree && unzip -q casadi-main-osx-arm64-octave7.3.0.zip -d tree
+          ls tree | head; ls tree | wc -l
+          T=tree; [ -d tree/casadi ] && T=tree/casadi; echo "T=$T" >> $GITHUB_ENV
+      - name: Perturb + build wheel
+        run: |
+          python scripts/perturb.py "$T"
+          python scripts/mkwheel.py "$T" dummy-1.0-cp39-none-macosx_10_13_x86_64.macosx_10_13_intel.whl
+          ls -la *.whl
+      - name: Install old and new delocate
+        run: |
+          python -m venv v_old; v_old/bin/pip -q install "git+https://github.com/jgillis/delocate.git@$OLD"
+          python -m venv v_new; v_new/bin/pip -q install "git+https://github.com/jgillis/delocate.git@$NEW"
+          v_old/bin/pip show delocate | grep Version; v_new/bin/pip show delocate | grep Version
+      - name: Counting shims for otool / install_name_tool
+        run: |
+          mkdir shims
+          for t in otool install_name_tool; do
+            printf '#!/bin/sh\necho %s >> "$CALL_LOG"\nexec /usr/bin/%s "$@"\n' $t $t > shims/$t; chmod +x shims/$t
+          done
+      - name: Run old and new
+        run: |
+          W=dummy-1.0-cp39-none-macosx_10_13_x86_64.macosx_10_13_intel.whl
+          for v in old new; do
+            mkdir in_$v out_$v; cp $W in_$v/
+            export CALL_LOG=$PWD/calls_$v.txt
+            s=$(date +%s)
+            PATH=$PWD/shims:$PATH DYLD_LIBRARY_PATH=$PWD/mockups/octave/lib \
+              v_$v/bin/delocate-wheel -k -w out_$v -L "" --skip-libs "$SKIP" in_$v/$W > log_$v.txt 2>&1 || { echo "$v FAILED"; tail -30 log_$v.txt; }
+            echo "TIME $v: $(( $(date +%s) - s )) s"
+            sort calls_$v.txt | uniq -c
+          done
+      - name: Compare
+        run: |
+          W=dummy-1.0-cp39-none-macosx_10_13_x86_64.macosx_10_13_intel.whl
+          for v in old new; do mkdir u_$v; unzip -q out_$v/$W -d u_$v; python scripts/dump.py u_$v > dump_$v.txt; wc -l dump_$v.txt; done
+          if diff dump_old.txt dump_new.txt > dump.diff; then echo "LOAD COMMANDS IDENTICAL"; else echo "DIFFERENCES:"; head -60 dump.diff; fi
+          echo "--- leftover Users/runner refs (old/new):"
+          grep -c "Users/runner" dump_old.txt || true; grep -c "Users/runner" dump_new.txt || true
+          echo "--- perturbed input still had:"; mkdir u_in; unzip -q in_old/$W -d u_in; python scripts/dump.py u_in | grep -c "Users/runner" || true
+      - name: Signatures and dlopen
+        run: |
+          for v in old new; do
+            bad=0; for f in $(cd u_$v && find . -name '*.dylib' -type f); do codesign -v "u_$v/$f" 2>/dev/null || bad=$((bad+1)); done
+            echo "$v invalid signatures: $bad"
+            python scripts/dlopen_all.py u_$v/dummy > dl_$v.txt
+          done
+          if diff dl_old.txt dl_new.txt; then echo "DLOPEN RESULTS IDENTICAL"; else echo "DLOPEN RESULTS DIFFER"; fi
+          grep FAIL dl_new.txt | head -20 || true
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ab-results
+          path: |
+            dump_*.txt
+            dump.diff
+            log_*.txt
+            calls_*.txt
+            dl_*.txt
