@@ -1495,7 +1495,6 @@ static void test_cmd_details() {
     struct V { std::string f, tag; };
     std::vector<V> vs = {
       {"%CDPATH%", "cdp"}, {"%cdpath%", "cdp"}, {"%CD_X%", "cdx"}, {"%__CD__X%", "ucdx"},
-      {"%CDE%", "%CDE%"}, {"x%CD", "x%CD"},
     };
     for (const V& v : vs) {
       Dict o = jit_base();
@@ -1503,10 +1502,11 @@ static void test_cmd_details() {
       wt.tag = v.tag.c_str();
       expect_ok("cwd with & flags [" + esc(def_flag() + "TAG=" + v.f) + "]", d, o, wt);
     }
-    {
+    // cl takes no % in /D, so as a nonexistent include directory
+    for (const char* v : {"%CDE%", "x%CD", "%=ExitCode%", "%CDE%%CD_X%", "!CDPATH!"}) {
       Dict o = jit_base();
-      o["flags"] = std::vector<std::string>{def_flag() + "X=%=ExitCode%"};
-      expect_ok("cwd with & flags [" + esc(def_flag() + "X=%=ExitCode%") + "]", d, o, w);
+      o["flags"] = std::vector<std::string>{inc_flag() + v};
+      expect_ok("cwd with & flags [" + esc(inc_flag() + v) + "]", d, o, w);
     }
     // The current directory itself, also through a variable or in lower case
     set_env("HARNESS_CDV", "%CD%");
@@ -1602,8 +1602,6 @@ static int fake_vswhere(int argc, char** argv) {
 static void test_vs_fail() {
   section("Visual Studio setup failures (" + g_jit + ")");
   std::string real = vcvarsall();
-  std::string real_install = real.substr(0, real.size() - std::string("\\VC\\Auxiliary\\Build\\vcvarsall.bat").size());
-  std::cout << "   real installation: " << real_install << std::endl;
   char self[MAX_PATH];
   GetModuleFileNameA(nullptr, self, MAX_PATH);
   const char* pf86 = getenv("ProgramFiles(x86)");
@@ -1616,7 +1614,9 @@ static void test_vs_fail() {
     {"empty", "", true, nullptr, false},
     {"novswhere", "", false, nullptr, false},
     {"vswhere_exit1", "", true, "1", false},
-    {"real", "", true, nullptr, true},
+    // vcvarsall.bat itself needs the real ProgramFiles(x86)
+    {"real", "@set \"ProgramFiles(x86)=" + old_pf86 + "\"\r\n@call \"" + real + "\" %*\r\n", true, nullptr,
+      true},
   };
   for (const B& b : bs) {
     std::string w = join(g_work, "vsfail " + b.name);
@@ -1632,7 +1632,7 @@ static void test_vs_fail() {
     std::string log = join(w, "vswhere log.txt");
     remove(log.c_str());
     set_env("ProgramFiles(x86)", pf);
-    set_env("HARNESS_FAKE_VS", b.name=="real" ? real_install : inst);
+    set_env("HARNESS_FAKE_VS", inst);
     set_env("HARNESS_FAKE_VS_LOG", log);
     if (b.exit) set_env("HARNESS_FAKE_VS_EXIT", b.exit); else unset_env("HARNESS_FAKE_VS_EXIT");
     std::string out = join(w, "child out.txt");
