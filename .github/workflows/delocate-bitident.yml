@@ -1,6 +1,6 @@
 name: delocate variants bit-identity (CI env)
 
-on: [push, workflow_dispatch]
+on: [workflow_dispatch]
 
 env:
   SKIP: libknitro:libhsl:libworhp:libsnopt7:libut:libmex:libmx:libeng:libmadnlp_c:libMad:libmosek64:libxprs:libonnxruntime:libipmc:libconopt:libconopt.so.4:libonnxruntime.so.1

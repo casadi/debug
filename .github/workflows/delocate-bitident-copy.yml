@@ -1,0 +1,115 @@
+name: delocate variants bit-identity, conda copy path (CI env)
+
+on: [push, workflow_dispatch]
+
+env:
+  SKIP: libknitro:libhsl:libworhp:libsnopt7:libut:libmex:libmx:libeng:libmadnlp_c:libMad:libmosek64:libxprs:libonnxruntime:libipmc:libconopt:libconopt.so.4:libonnxruntime.so.1
+  W: dummy-1.0-cp39-none-macosx_10_13_x86_64.macosx_10_13_intel.whl
+
+jobs:
+  inputs:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4.1.1
+      - uses: casadi/action-setup-compiler@master
+        with:
+          cache-suffix: ''
+          target: arm64
+      - name: Build input wheels
+        shell: bash -el {0}
+        run: |
+          curl -fsSLO https://github.com/casadi/casadi/releases/download/nightly-main/casadi-main-osx-arm64-octave7.3.0.zip
+          shasum -a 256 casadi-main-osx-arm64-octave7.3.0.zip
+          for k in copy_asis copy_perturbed; do mkdir -p tree_$k inputs/$k; unzip -q casadi-main-osx-arm64-octave7.3.0.zip -d tree_$k; done
+          /usr/bin/python3 scripts/perturb.py tree_copy_perturbed
+          for k in copy_asis copy_perturbed; do
+            /usr/bin/python3 scripts/strip_conda_libs.py tree_$k "$COMPILER_LIB_SEARCH_PATH"
+            /usr/bin/python3 scripts/mkwheel.py tree_$k inputs/$k/$W
+          done
+          shasum -a 256 inputs/*/*.whl
+      - uses: actions/upload-artifact@v4
+        with:
+          name: inputs
+          path: inputs
+          retention-days: 3
+
+  variant:
+    needs: inputs
+    runs-on: macos-15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {name: base,      ref: f364b5dfa3acf44c6f9c07c52b44957922d6ffa7, inputs: "copy_asis"}
+          - {name: base,      ref: f364b5dfa3acf44c6f9c07c52b44957922d6ffa7, inputs: "copy_perturbed"}
+          - {name: base2,     ref: f364b5dfa3acf44c6f9c07c52b44957922d6ffa7, inputs: "copy_perturbed"}
+          - {name: master,    ref: e821156cca18e784e5d23b6e962184e7feda9e0b, inputs: "copy_asis copy_perturbed"}
+          - {name: batch,     ref: 85efc68,                                  inputs: "copy_asis copy_perturbed"}
+          - {name: stripenv,  ref: d5c9197,                                  inputs: "copy_asis copy_perturbed"}
+    steps:
+      - uses: actions/checkout@v4.1.1
+      # Same as matlab-osx in casadi binaries.yml, then universal_grafter
+      - uses: casadi/action-setup-compiler@master
+        with:
+          cache-suffix: ''
+          target: arm64
+      - name: Mockups (as in binaries.yml)
+        run: |
+          curl -fsSLO https://github.com/casadi/mockups/releases/download/v116/mockups_macos-15_arm64_Release.zip
+          unzip -q mockups_macos-15_arm64_Release.zip -d mockups
+      - uses: conda-incubator/setup-miniconda@77236efeba76d591229f44c36f2469426cc33dec
+        with:
+          python-version: 3.9
+          auto-update-conda: true
+          channels: conda-forge, anaconda
+          activate-environment: grafting
+      - uses: actions/download-artifact@v4
+        with:
+          name: inputs
+          path: inputs
+      - name: Install delocate ${{ matrix.name }}
+        shell: bash -el {0}
+        run: |
+          pip install "git+https://github.com/jgillis/delocate.git@${{ matrix.ref }}" --target d 2>&1 | grep -i "resolved\|error" || true
+      - name: Run delocate-wheel (CI env)
+        shell: bash -el {0}
+        run: |
+          mkdir manifests
+          for k in ${{ matrix.inputs }}; do
+            mkdir -p work_$k out_$k; cp inputs/$k/$W work_$k/
+            s=$(date +%s)
+            DYLD_LIBRARY_PATH=$COMPILER_LIB_SEARCH_PATH:$PWD/mockups/octave/lib PYTHONPATH=$PWD/d \
+              python -m delocate.cmd.delocate_wheel -k -w out_$k -L "" --skip-libs "$SKIP" work_$k/$W > log_$k.txt 2>&1
+            echo "TIME ${{ matrix.name }} $k: $(( $(date +%s) - s )) s"
+            mkdir u_$k; unzip -q out_$k/$W -d u_$k
+            python scripts/manifest.py u_$k > manifests/${{ matrix.name }}_$k.txt
+            echo "conda libs in output ($k):"; for f in $(ls $COMPILER_LIB_SEARCH_PATH); do [ -e u_$k/dummy/$f ] && echo "  $f"; done
+            wc -l manifests/${{ matrix.name }}_$k.txt
+          done
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: manifest-${{ matrix.name }}-${{ strategy.job-index }}
+          path: manifests
+          retention-days: 3
+
+  compare:
+    needs: variant
+    if: always()
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: manifest-*
+          merge-multiple: true
+          path: m
+      - name: Compare against base (f364b5d)
+        run: |
+          ls m; rc=0
+          for f in m/*.txt; do
+            n=$(basename $f .txt); k=${n#*_}
+            [ "$n" = "base_$k" ] && continue
+            if cmp -s m/base_$k.txt $f; then echo "IDENTICAL  $n vs base_$k ($(wc -l < $f) files)"
+            else echo "DIFFERENT  $n vs base_$k:"; diff m/base_$k.txt $f | head -20; rc=1; fi
+          done
+          exit $rc
